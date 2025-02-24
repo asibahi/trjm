@@ -6,11 +6,11 @@ use nom::Input;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Token {
     // Stuff
-    Identifier(EcoString),
+    Ident(EcoString),
     NumberLiteral(usize),
 
     // Keywords
-    Int, // doubtful
+    Int,  // doubtful
     Void, // also doubtful
     Return,
 
@@ -23,6 +23,24 @@ pub(crate) enum Token {
 
     // Other
     Comments,
+}
+
+impl Token {
+    pub fn unwrap_ident(&self) -> Option<EcoString> {
+        if let Token::Ident(s) = self {
+            Some(s.clone())
+        } else {
+            None
+        }
+    }
+
+    pub fn unwrap_number(&self) -> Option<usize> {
+        if let Token::NumberLiteral(v) = self {
+            Some(*v)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

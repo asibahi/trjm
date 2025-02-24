@@ -1,15 +1,13 @@
-use ecow::EcoString;
+use crate::token::*;
 use nom::{
-    AsChar, Finish, IResult, Input, Parser,
+    AsChar, Finish, IResult, Parser,
     branch::alt,
-    bytes::{complete::take_until, tag, take_while, take_while1},
+    bytes::{complete::take_until, tag, take_while},
     character::{complete::usize, multispace0, satisfy},
     combinator::{all_consuming, peek, recognize},
-    multi::many,
+    multi::fold,
     sequence::{delimited, preceded, terminated},
 };
-
-use crate::token::*;
 
 pub(crate) fn lex(i: &str) -> Result<Vec<Token>, ()> {
     let tokens = alt((
@@ -25,11 +23,15 @@ pub(crate) fn lex(i: &str) -> Result<Vec<Token>, ()> {
 
     let (i, _) = multispace0().parse_complete(i).finish()?;
 
-    let (_, ret) = all_consuming(many(1.., tokens))
-        .parse_complete(i)
-        .finish()?;
-
-    Ok(ret)
+    all_consuming(fold(1.., tokens, Vec::new, |mut acc, token| {
+        if !matches!(token, Token::Comments) {
+            acc.push(token);
+        }
+        acc
+    }))
+    .parse_complete(i)
+    .finish()
+    .map(|t| t.1)
 }
 
 macro_rules! token {
@@ -61,7 +63,7 @@ token!(
         "int" => Token::Int,
         "void" => Token::Void,
         "return" => Token::Return,
-        s => Token::Identifier(s.into()),
+        s => Token::Ident(s.into()),
     })
 );
 token!(

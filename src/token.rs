@@ -7,7 +7,7 @@ use nom::Input;
 pub(crate) enum Token {
     // Stuff
     Ident(EcoString),
-    NumberLiteral(usize),
+    NumberLiteral(i32),
 
     // Keywords
     Int,  // doubtful
@@ -31,7 +31,7 @@ impl Token {
         }
     }
 
-    pub fn unwrap_number(&self) -> Option<usize> {
+    pub fn unwrap_number(&self) -> Option<i32> {
         if let Token::NumberLiteral(v) = self {
             Some(*v)
         } else {

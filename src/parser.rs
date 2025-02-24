@@ -9,9 +9,9 @@ use nom::{
     sequence::delimited,
 };
 
-pub fn parse(tokens: Vec<Token>) -> Result<Program, ()> {
+pub fn parse(tokens: &[Token]) -> Result<Program, ()> {
     all_consuming(parse_program)
-        .parse_complete(Tokens(&tokens))
+        .parse_complete(Tokens(tokens))
         .finish()
         .map(|t| t.1)
 }

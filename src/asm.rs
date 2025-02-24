@@ -5,6 +5,17 @@ pub trait Asm {
     fn emit_code(&self, f: &mut impl Write);
 }
 
+impl<T> Asm for Vec<T>
+where
+    T: Asm,
+{
+    fn emit_code(&self, f: &mut impl Write) {
+        for elem in self {
+            elem.emit_code(f);
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Program(pub FuncDef);
 impl Asm for Program {
@@ -20,13 +31,13 @@ pub struct FuncDef {
 }
 impl Asm for FuncDef {
     fn emit_code(&self, f: &mut impl Write) {
-        write!(f, "\t.globl _").unwrap();
+        _ = write!(f, "\t.globl _");
         self.name.emit_code(f);
-        writeln!(f).unwrap();
+        _ = writeln!(f);
 
-        write!(f, "_").unwrap();
+        _ = write!(f, "_");
         self.name.emit_code(f);
-        writeln!(f, ":").unwrap();
+        _ = writeln!(f, ":");
 
         self.instrs.emit_code(f);
     }
@@ -41,39 +52,32 @@ impl Asm for Instr {
     fn emit_code(&self, f: &mut impl Write) {
         match self {
             Instr::Mov { src, dst } => {
-                write!(f, "\tmovl ").unwrap();
+                _ = write!(f, "\tmovl ");
                 src.emit_code(f);
-                write!(f, ", ").unwrap();
+                _ = write!(f, ", ");
                 dst.emit_code(f);
-                writeln!(f).unwrap();
+                _ = writeln!(f);
             }
             Instr::Ret => {
-                writeln!(f, "\tret").unwrap();
+                _ = writeln!(f, "\tret");
             }
-        }
-    }
-}
-impl Asm for Vec<Instr> {
-    fn emit_code(&self, f: &mut impl Write) {
-        for instr in self {
-            instr.emit_code(f);
         }
     }
 }
 
 #[derive(Debug)]
 pub enum Operand {
-    Imm(usize),
+    Imm(u32),
     Register,
 }
 impl Asm for Operand {
     fn emit_code(&self, f: &mut impl Write) {
         match self {
             Operand::Imm(i) => {
-                write!(f, "${i}").unwrap();
+                _ = write!(f, "${i}");
             }
             Operand::Register => {
-                write!(f, "%eax").unwrap();
+                _ = write!(f, "%eax");
             }
         }
     }
@@ -83,6 +87,6 @@ impl Asm for Operand {
 pub struct Ident(pub EcoString);
 impl Asm for Ident {
     fn emit_code(&self, f: &mut impl Write) {
-        write!(f, "{}", self.0).unwrap();
+        _ = write!(f, "{}", self.0);
     }
 }

@@ -1,12 +1,12 @@
-use crate::token::*;
+use crate::token::Token;
 use nom::{
     AsChar, Finish, IResult, Parser,
     branch::alt,
-    bytes::{complete::take_until, tag, take_while},
-    character::{complete::usize, multispace0, satisfy},
+    bytes::{tag, take_while},
+    character::{complete::i32, multispace0, satisfy},
     combinator::{all_consuming, peek, recognize},
     multi::many,
-    sequence::{delimited, preceded, terminated},
+    sequence::{preceded, terminated},
 };
 
 pub(crate) fn lex(i: &str) -> Result<Vec<Token>, ()> {
@@ -62,5 +62,5 @@ token!(
 );
 token!(
     number,
-    terminated(usize, peek(satisfy(|c| c != '_' && !c.is_alpha()))).map(Token::NumberLiteral)
+    terminated(i32, peek(satisfy(|c| c != '_' && !c.is_alpha()))).map(Token::NumberLiteral)
 );

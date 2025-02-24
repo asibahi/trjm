@@ -65,12 +65,14 @@ impl Node for Stmt {
 
 #[derive(Debug)]
 pub enum Expr {
-    ConstInt(usize),
+    ConstInt(i32),
 }
 impl Node for Expr {
+    #[allow(clippy::cast_sign_loss)]
+    // not sure if this is even correct.
     fn to_asm(&self) -> asm::Operand {
         match self {
-            Expr::ConstInt(i) => asm::Operand::Imm(*i),
+            Expr::ConstInt(i) => asm::Operand::Imm(*i as u32),
         }
     }
 }

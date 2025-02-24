@@ -2,6 +2,9 @@
 
 use std::{fs::read_to_string, io, path::PathBuf, process::exit};
 
+use ast::Node;
+
+mod asm;
 mod ast;
 mod lexer;
 mod parser;
@@ -12,6 +15,7 @@ pub fn run() {
 
     let lex = args.contains("--lex");
     let prs = args.contains("--parse");
+    let cdgen = args.contains("--codegen");
 
     let Ok(input) = args
         .free_from_fn(validate_path)
@@ -42,6 +46,10 @@ pub fn run() {
     if prs {
         exit(0)
     }
+
+    let prgm: asm::Program = prgm.to_asm();
+
+
 }
 
 fn validate_path(s: &str) -> io::Result<String> {

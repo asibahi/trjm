@@ -20,9 +20,6 @@ pub(crate) enum Token {
     BraceOpen,
     BraceClose,
     Semicolon,
-
-    // Other
-    Comments,
 }
 
 impl Token {

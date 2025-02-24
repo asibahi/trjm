@@ -5,7 +5,7 @@ use nom::{
     bytes::{complete::take_until, tag, take_while},
     character::{complete::usize, multispace0, satisfy},
     combinator::{all_consuming, peek, recognize},
-    multi::fold,
+    multi::many,
     sequence::{delimited, preceded, terminated},
 };
 
@@ -18,20 +18,14 @@ pub(crate) fn lex(i: &str) -> Result<Vec<Token>, ()> {
         brace_close,
         identifier,
         number,
-        comments,
     ));
 
     let (i, _) = multispace0().parse_complete(i).finish()?;
 
-    all_consuming(fold(1.., tokens, Vec::new, |mut acc, token| {
-        if !matches!(token, Token::Comments) {
-            acc.push(token);
-        }
-        acc
-    }))
-    .parse_complete(i)
-    .finish()
-    .map(|t| t.1)
+    all_consuming(many(1.., tokens))
+        .parse_complete(i)
+        .finish()
+        .map(|t| t.1)
 }
 
 macro_rules! token {
@@ -69,12 +63,4 @@ token!(
 token!(
     number,
     terminated(usize, peek(satisfy(|c| c != '_' && !c.is_alpha()))).map(Token::NumberLiteral)
-);
-token!(
-    comments,
-    alt((
-        preceded(tag("//"), take_until("\n")),
-        delimited(tag("/*"), take_until("*/"), tag("*/"))
-    ))
-    .map(|_| Token::Comments)
 );

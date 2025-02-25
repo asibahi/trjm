@@ -66,6 +66,7 @@ impl Node for Stmt {
 #[derive(Debug)]
 pub enum Expr {
     ConstInt(i32),
+    Unary(UnaryOp, Box<Expr>),
 }
 impl Node for Expr {
     #[allow(clippy::cast_sign_loss)]
@@ -73,6 +74,18 @@ impl Node for Expr {
     fn to_asm(&self) -> asm::Operand {
         match self {
             Expr::ConstInt(i) => asm::Operand::Imm(*i as u32),
+            Expr::Unary(..) => todo!(),
         }
+    }
+}
+
+#[derive(Debug)]
+pub enum UnaryOp {
+    Complement,
+    Negate,
+}
+impl Node for UnaryOp {
+    fn to_asm(&self) -> impl asm::Asm {
+        if true { todo!() } else { asm::Instr::Ret }
     }
 }

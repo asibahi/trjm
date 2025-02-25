@@ -41,19 +41,20 @@ fn parse() -> Result<(Mode, PathBuf), ExitCode> {
     let mut args = Arguments::from_env();
 
     let mode = (
-        args.contains("--lexer"),
+        args.contains("--lex"),
         args.contains("--parse"),
         args.contains("--codegen"),
     );
 
     // let assembly_only = args.contains("-S");
 
-    args.free_from_fn(validate_path)
-        .map(|i| (mode, i))
-        .map_err(|_| {
-            eprintln!("Input file required");
-            ExitCode::from(43)
-        })
+    match args.free_from_fn(validate_path) {
+        Ok(i) => Ok((mode, i)),
+        Err(e) => {
+            eprintln!("Input file required. {e}");
+            Err(ExitCode::from(43))
+        }
+    }
 }
 
 fn validate_path(s: &str) -> Result<PathBuf, &'static str> {

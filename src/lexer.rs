@@ -9,8 +9,13 @@ use nom::{
     sequence::{preceded, terminated},
 };
 
-pub(crate) fn lex(i: &str) -> Result<Vec<Token>, ()> {
+type LexError = ();
+
+pub fn lex(i: &str) -> Result<Vec<Token>, LexError> {
     let tokens = alt((
+        decrement,
+        hyphen,
+        tilde,
         semicolon,
         paren_open,
         paren_close,
@@ -30,7 +35,7 @@ pub(crate) fn lex(i: &str) -> Result<Vec<Token>, ()> {
 
 macro_rules! token {
     ($func:ident, $body:expr) => {
-        fn $func(i: &str) -> IResult<&str, Token, ()> {
+        fn $func(i: &str) -> IResult<&str, Token, LexError> {
             let (i, token) = $body.parse_complete(i)?;
             let (i, _) = multispace0().parse_complete(i)?;
 
@@ -42,6 +47,11 @@ macro_rules! token {
     };
 }
 
+// order of these is important in the main function.
+token!(decrement, Decrement, "--");
+token!(hyphen, Hyphen, "-");
+
+token!(tilde, Tilde, "~");
 token!(semicolon, Semicolon, ";");
 token!(paren_open, ParenOpen, "(");
 token!(paren_close, ParenClose, ")");

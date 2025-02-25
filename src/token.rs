@@ -14,6 +14,11 @@ pub(crate) enum Token {
     Void, // also doubtful
     Return,
 
+    // Operators
+    Tilde,
+    Hyphen,
+    Decrement,
+
     // Punctuation
     ParenOpen,
     ParenClose,

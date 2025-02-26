@@ -13,3 +13,4 @@ pedantic.level = "warn"
 pedantic.priority = -1
 missing_errors_doc = "allow"
 wildcard_imports = "allow"
+ignored_unit_patterns = "allow"

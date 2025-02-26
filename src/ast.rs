@@ -17,23 +17,15 @@ impl Node for Program {
 
 #[derive(Debug)]
 pub struct FuncDef {
-    pub name: Ident,
+    pub name: EcoString,
     pub body: Stmt,
 }
 impl Node for FuncDef {
     fn to_asm(&self) -> asm::FuncDef {
         asm::FuncDef {
-            name: self.name.to_asm(),
+            name: self.name.clone(),
             instrs: self.body.to_asm(),
         }
-    }
-}
-
-#[derive(Debug)]
-pub struct Ident(pub EcoString);
-impl Node for Ident {
-    fn to_asm(&self) -> asm::Ident {
-        asm::Ident(self.0.clone())
     }
 }
 

@@ -26,19 +26,13 @@ impl Asm for Program {
 
 #[derive(Debug)]
 pub struct FuncDef {
-    pub name: Ident,
+    pub name: EcoString,
     pub instrs: Vec<Instr>,
 }
 impl Asm for FuncDef {
     fn emit_code(&self, f: &mut impl Write) {
-        _ = write!(f, "\t.globl _");
-        self.name.emit_code(f);
-        _ = writeln!(f);
-
-        _ = write!(f, "_");
-        self.name.emit_code(f);
-        _ = writeln!(f, ":");
-
+        _ = writeln!(f, "\t.globl _{}", self.name);
+        _ = writeln!(f, "_{}:", self.name);
         self.instrs.emit_code(f);
     }
 }
@@ -80,13 +74,5 @@ impl Asm for Operand {
                 _ = write!(f, "%eax");
             }
         }
-    }
-}
-
-#[derive(Debug)]
-pub struct Ident(pub EcoString);
-impl Asm for Ident {
-    fn emit_code(&self, f: &mut impl Write) {
-        _ = write!(f, "{}", self.0);
     }
 }

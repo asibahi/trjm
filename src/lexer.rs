@@ -9,9 +9,12 @@ use nom::{
     sequence::{preceded, terminated},
 };
 
-type LexError = ();
+type LexError<'s> = ();
+// type LexError<'s> = (&'s str, nom::ErrorKind);
+type Emit = nom::OutputM<nom::Emit, nom::Emit, nom::Complete>;
+type Check = nom::OutputM<nom::Check, nom::Emit, nom::Complete>;
 
-pub fn lex(i: &str) -> Result<Vec<Token>, LexError> {
+pub fn lex(i: &str) -> Result<Vec<Token>, LexError<'_>> {
     let tokens = alt((
         decrement,
         hyphen,
@@ -25,19 +28,19 @@ pub fn lex(i: &str) -> Result<Vec<Token>, LexError> {
         number,
     ));
 
-    let (i, _) = multispace0().parse_complete(i).finish()?;
+    let (i, _) = multispace0().process::<Check>(i).finish()?;
 
     all_consuming(many(1.., tokens))
-        .parse_complete(i)
+        .process::<Emit>(i)
         .finish()
         .map(|t| t.1)
 }
 
 macro_rules! token {
     ($func:ident, $body:expr) => {
-        fn $func(i: &str) -> IResult<&str, Token, LexError> {
-            let (i, token) = $body.parse_complete(i)?;
-            let (i, _) = multispace0().parse_complete(i)?;
+        fn $func(i: &str) -> IResult<&str, Token, LexError<'_>> {
+            let (i, token) = $body.process::<Emit>(i)?;
+            let (i, _) = multispace0().process::<Check>(i)?;
 
             Ok((i, token))
         }

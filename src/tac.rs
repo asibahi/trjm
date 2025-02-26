@@ -1,10 +1,10 @@
 #![allow(refining_impl_trait_internal)]
 
-use crate::asm;
+use crate::assembly;
 use ecow::EcoString;
 
 pub trait Tac: std::fmt::Debug + Clone {
-    type Output: asm::Assembly;
+    type Output: assembly::Assembly;
     fn to_asm(&self) -> Self::Output;
 }
 impl<T> Tac for Vec<T>
@@ -20,9 +20,9 @@ where
 #[derive(Debug, Clone)]
 pub struct Program(pub FuncDef);
 impl Tac for Program {
-    type Output = asm::Program;
+    type Output = assembly::Program;
     fn to_asm(&self) -> Self::Output {
-        asm::Program(self.0.to_asm())
+        assembly::Program(self.0.to_asm())
     }
 }
 
@@ -32,9 +32,9 @@ pub struct FuncDef {
     pub body: Vec<Instr>,
 }
 impl Tac for FuncDef {
-    type Output = asm::FuncDef;
+    type Output = assembly::FuncDef;
     fn to_asm(&self) -> Self::Output {
-        asm::FuncDef {
+        assembly::FuncDef {
             name: self.name.clone(),
             instrs: self.body.to_asm().iter().flatten().cloned().collect(),
         }
@@ -47,24 +47,24 @@ pub enum Instr {
     Unary { op: UnOp, src: Value, dst: Place },
 }
 impl Tac for Instr {
-    type Output = Vec<asm::Instr>;
+    type Output = Vec<assembly::Instr>;
     fn to_asm(&self) -> Self::Output {
         match self {
             Instr::Return(value) => vec![
-                asm::Instr::Mov {
+                assembly::Instr::Mov {
                     src: value.to_asm(),
-                    dst: asm::Operand::Reg(asm::Register::AX),
+                    dst: assembly::Operand::Reg(assembly::Register::AX),
                 },
-                asm::Instr::Ret,
+                assembly::Instr::Ret,
             ],
             Instr::Unary { op, src, dst } => {
                 let dst = dst.to_asm();
                 vec![
-                    asm::Instr::Mov {
+                    assembly::Instr::Mov {
                         src: src.to_asm(),
                         dst: dst.clone(),
                     },
-                    asm::Instr::Unary(op.to_asm(), dst),
+                    assembly::Instr::Unary(op.to_asm(), dst),
                 ]
             }
         }
@@ -77,10 +77,10 @@ pub enum Value {
     Var(Place),
 }
 impl Tac for Value {
-    type Output = asm::Operand;
+    type Output = assembly::Operand;
     fn to_asm(&self) -> Self::Output {
         match self {
-            Value::Const(i) => asm::Operand::Imm(*i),
+            Value::Const(i) => assembly::Operand::Imm(*i),
             Value::Var(place) => place.to_asm(),
         }
     }
@@ -89,9 +89,9 @@ impl Tac for Value {
 #[derive(Debug, Clone)]
 pub struct Place(pub EcoString);
 impl Tac for Place {
-    type Output = asm::Operand;
+    type Output = assembly::Operand;
     fn to_asm(&self) -> Self::Output {
-        asm::Operand::Pseudo(self.0.clone())
+        assembly::Operand::Pseudo(self.0.clone())
     }
 }
 
@@ -101,11 +101,11 @@ pub enum UnOp {
     Negate,
 }
 impl Tac for UnOp {
-    type Output = asm::UnOp;
+    type Output = assembly::UnOp;
     fn to_asm(&self) -> Self::Output {
         match self {
-            UnOp::Complement => asm::UnOp::Not,
-            UnOp::Negate => asm::UnOp::Neg,
+            UnOp::Complement => assembly::UnOp::Not,
+            UnOp::Negate => assembly::UnOp::Neg,
         }
     }
 }

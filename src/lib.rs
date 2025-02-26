@@ -2,14 +2,14 @@
 
 use std::{fs::read_to_string, io::Write, path::PathBuf};
 
-mod asm;
+mod assembly;
 mod ast;
 mod lexer;
 mod parser;
 mod tac;
 mod token;
 
-use asm::Assembly;
+use assembly::Assembly;
 use ast::Node;
 use tac::Tac;
 
@@ -46,7 +46,7 @@ pub fn compile(input: &PathBuf, [lex, parse, tacky, codegen]: [bool; 4]) -> Resu
         return Err(0);
     }
 
-    let mut prgm: asm::Program = prgm.to_asm();
+    let mut prgm: assembly::Program = prgm.to_asm();
     prgm.fixup_passes();
 
     if codegen {

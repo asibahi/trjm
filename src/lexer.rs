@@ -1,3 +1,5 @@
+#![warn(dead_code)]
+
 use crate::token::Token;
 use nom::{
     AsChar, Finish, IResult, Parser,
@@ -16,22 +18,27 @@ type Check = nom::OutputM<nom::Check, nom::Emit, nom::Complete>;
 
 pub fn lex(i: &str) -> Result<Vec<Token>, LexError<'_>> {
     let tokens = alt((
-        decrement,
-        hyphen,
+        dec_family,
+        inc_family,
+        //
+        asterisk,
+        forward_slash,
+        percent,
         tilde,
+        bang,
+        //
         semicolon,
         paren_open,
         paren_close,
         brace_open,
         brace_close,
+        //
         identifier,
         number,
     ));
 
-    let (i, _) = multispace0().process::<Check>(i).finish()?;
-
     all_consuming(many(1.., tokens))
-        .process::<Emit>(i)
+        .process::<Emit>(i.trim())
         .finish()
         .map(|t| t.1)
 }
@@ -50,11 +57,23 @@ macro_rules! token {
     };
 }
 
-// order of these is important in the main function.
+// order of these is important
 token!(decrement, Decrement, "--");
 token!(hyphen, Hyphen, "-");
 
+token!(dec_family, alt((decrement, hyphen)));
+
+token!(incrmeent, Increment, "++");
+token!(plus, Plus, "+");
+
+token!(inc_family, alt((incrmeent, plus)));
+
+token!(asterisk, Astrisk, "*");
+token!(forward_slash, ForwardSlash, "/");
+token!(percent, Percent, "%");
 token!(tilde, Tilde, "~");
+token!(bang, Bang, "!");
+
 token!(semicolon, Semicolon, ";");
 token!(paren_open, ParenOpen, "(");
 token!(paren_close, ParenClose, ")");

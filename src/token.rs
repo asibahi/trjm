@@ -3,6 +3,7 @@ use std::iter::{Cloned, Enumerate};
 use ecow::EcoString;
 use nom::Input;
 
+#[warn(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Token {
     // Stuff
@@ -15,8 +16,15 @@ pub(crate) enum Token {
     Return,
 
     // Operators
+    Plus,
+    Astrisk,
+    ForwardSlash,
+    Percent,
     Tilde,
     Hyphen,
+    Bang,
+
+    Increment,
     Decrement,
 
     // Punctuation

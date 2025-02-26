@@ -9,8 +9,9 @@ mod parser;
 mod tac;
 mod token;
 
-use asm::Asm;
+use asm::Assembly;
 use ast::Node;
+use tac::Tac;
 
 pub fn compile(input: &PathBuf, [lex, parse, tacky, codegen]: [bool; 4]) -> Result<PathBuf, u8> {
     let Ok(code) = read_to_string(input) else {
@@ -45,16 +46,17 @@ pub fn compile(input: &PathBuf, [lex, parse, tacky, codegen]: [bool; 4]) -> Resu
         return Err(0);
     }
 
-    let prgm: asm::Program = todo!();
+    let mut prgm: asm::Program = prgm.to_asm();
+    prgm.fixup_passes();
 
     if codegen {
         eprintln!("{prgm:#?}");
 
-        let mut buf = Vec::new();
-        prgm.emit_code(&mut buf);
+        // let mut buf = Vec::new();
+        // prgm.emit_code(&mut buf);
 
-        let buf = String::from_utf8_lossy(&buf);
-        eprintln!("{buf}");
+        // let buf = String::from_utf8_lossy(&buf);
+        // eprintln!("{buf}");
 
         return Err(0);
     }

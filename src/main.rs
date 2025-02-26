@@ -18,7 +18,10 @@ fn main() -> ExitCode {
 
     let compiled = match trjm::compile(&preprocessed, mode) {
         Ok(c) => c,
-        Err(e) => return ExitCode::from(e),
+        Err(e) => {
+            _ = remove_file(preprocessed);
+            return ExitCode::from(e);
+        }
     };
     _ = remove_file(preprocessed);
 

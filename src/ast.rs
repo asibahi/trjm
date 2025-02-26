@@ -5,7 +5,8 @@ use ecow::{EcoString, eco_format};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
 pub trait Node {
-    fn to_tac(&self, instrs: &mut Vec<tac::Instr>) -> impl tac::Tac;
+    type Output: tac::Tac;
+    fn to_tac(&self, instrs: &mut Vec<tac::Instr>) -> Self::Output;
 }
 
 #[derive(Debug)]
@@ -17,7 +18,8 @@ impl Program {
     }
 }
 impl Node for Program {
-    fn to_tac(&self, instrs: &mut Vec<tac::Instr>) -> tac::Program {
+    type Output = tac::Program;
+    fn to_tac(&self, instrs: &mut Vec<tac::Instr>) -> Self::Output {
         tac::Program(self.0.to_tac(instrs))
     }
 }
@@ -28,8 +30,9 @@ pub struct FuncDef {
     pub body: Stmt,
 }
 impl Node for FuncDef {
-    fn to_tac(&self, instrs: &mut Vec<tac::Instr>) -> tac::FuncDef {
-        tac::FuncDef {
+    type Output = tac::FuncDef;
+    fn to_tac(&self, instrs: &mut Vec<tac::Instr>) -> Self::Output {
+        Self::Output {
             name: self.name.clone(),
             body: self.body.to_tac(instrs),
         }
@@ -46,7 +49,8 @@ pub enum Stmt {
     },
 }
 impl Node for Stmt {
-    fn to_tac(&self, instrs: &mut Vec<tac::Instr>) -> Vec<tac::Instr> {
+    type Output = Vec<tac::Instr>;
+    fn to_tac(&self, instrs: &mut Vec<tac::Instr>) -> Self::Output {
         match self {
             Stmt::Return(expr) => {
                 let dst = expr.to_tac(instrs);
@@ -68,8 +72,9 @@ pub enum Expr {
     Unary(UnaryOp, Box<Expr>),
 }
 impl Node for Expr {
+    type Output = tac::Value;
     #[allow(clippy::cast_sign_loss)]
-    fn to_tac(&self, instrs: &mut Vec<tac::Instr>) -> tac::Value {
+    fn to_tac(&self, instrs: &mut Vec<tac::Instr>) -> Self::Output {
         match self {
             Expr::ConstInt(i) => tac::Value::Const(*i as u32),
             Expr::Unary(unary_op, expr) => {
@@ -99,7 +104,8 @@ pub enum UnaryOp {
     Negate,
 }
 impl Node for UnaryOp {
-    fn to_tac(&self, _: &mut Vec<tac::Instr>) -> tac::UnOp {
+    type Output = tac::UnOp;
+    fn to_tac(&self, _: &mut Vec<tac::Instr>) -> Self::Output {
         match self {
             UnaryOp::Complement => tac::UnOp::Complement,
             UnaryOp::Negate => tac::UnOp::Negate,

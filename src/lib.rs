@@ -6,12 +6,13 @@ mod asm;
 mod ast;
 mod lexer;
 mod parser;
+mod tac;
 mod token;
 
 use asm::Asm;
 use ast::Node;
 
-pub fn compile(input: &PathBuf, (lex, parse, codegen): (bool, bool, bool)) -> Result<PathBuf, u8> {
+pub fn compile(input: &PathBuf, [lex, parse, tacky, codegen]: [bool; 4]) -> Result<PathBuf, u8> {
     let Ok(code) = read_to_string(input) else {
         eprintln!("Unable to read file.");
         return Err(2);
@@ -23,7 +24,7 @@ pub fn compile(input: &PathBuf, (lex, parse, codegen): (bool, bool, bool)) -> Re
     };
 
     if lex {
-        eprintln!("{tokens:?}");
+        eprintln!("{tokens:#?}");
         return Err(0);
     }
 
@@ -37,7 +38,14 @@ pub fn compile(input: &PathBuf, (lex, parse, codegen): (bool, bool, bool)) -> Re
         return Err(0);
     }
 
-    let prgm: asm::Program = prgm.to_asm();
+    let prgm = prgm.compile();
+
+    if tacky {
+        eprintln!("{prgm:#?}");
+        return Err(0);
+    }
+
+    let prgm: asm::Program = todo!();
 
     if codegen {
         eprintln!("{prgm:#?}");

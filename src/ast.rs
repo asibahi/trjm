@@ -1,17 +1,24 @@
 #![allow(refining_impl_trait_internal)]
 
-use crate::asm;
-use ecow::EcoString;
+use crate::tac;
+use ecow::{EcoString, eco_format};
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
 pub trait Node {
-    fn to_asm(&self) -> impl asm::Asm;
+    fn to_tac(&self, instrs: &mut Vec<tac::Instr>) -> impl tac::Tac;
 }
 
 #[derive(Debug)]
 pub struct Program(pub FuncDef);
+impl Program {
+    pub fn compile(&self) -> tac::Program {
+        let mut buf = vec![];
+        self.to_tac(&mut buf)
+    }
+}
 impl Node for Program {
-    fn to_asm(&self) -> asm::Program {
-        asm::Program(self.0.to_asm())
+    fn to_tac(&self, instrs: &mut Vec<tac::Instr>) -> tac::Program {
+        tac::Program(self.0.to_tac(instrs))
     }
 }
 
@@ -21,10 +28,10 @@ pub struct FuncDef {
     pub body: Stmt,
 }
 impl Node for FuncDef {
-    fn to_asm(&self) -> asm::FuncDef {
-        asm::FuncDef {
+    fn to_tac(&self, instrs: &mut Vec<tac::Instr>) -> tac::FuncDef {
+        tac::FuncDef {
             name: self.name.clone(),
-            instrs: self.body.to_asm(),
+            body: self.body.to_tac(instrs),
         }
     }
 }
@@ -39,18 +46,18 @@ pub enum Stmt {
     },
 }
 impl Node for Stmt {
-    fn to_asm(&self) -> Vec<asm::Instr> {
+    fn to_tac(&self, instrs: &mut Vec<tac::Instr>) -> Vec<tac::Instr> {
         match self {
             Stmt::Return(expr) => {
-                vec![
-                    asm::Instr::Mov {
-                        src: expr.to_asm(),
-                        dst: asm::Operand::Register,
-                    },
-                    asm::Instr::Ret,
-                ]
+                let dst = expr.to_tac(instrs);
+
+                // is this right?
+                let mut ret = std::mem::take(instrs);
+                ret.push(tac::Instr::Return(dst));
+
+                ret
             }
-            Stmt::If { cond, then, else_ } => todo!(),
+            Stmt::If { cond, then, else_ } => unimplemented!(),
         }
     }
 }
@@ -62,11 +69,26 @@ pub enum Expr {
 }
 impl Node for Expr {
     #[allow(clippy::cast_sign_loss)]
-    // not sure if this is even correct.
-    fn to_asm(&self) -> asm::Operand {
+    fn to_tac(&self, instrs: &mut Vec<tac::Instr>) -> tac::Value {
         match self {
-            Expr::ConstInt(i) => asm::Operand::Imm(*i as u32),
-            Expr::Unary(..) => todo!(),
+            Expr::ConstInt(i) => tac::Value::Const(*i as u32),
+            Expr::Unary(unary_op, expr) => {
+                static UNARY_TMP: AtomicUsize = AtomicUsize::new(0);
+
+                let src = expr.to_tac(instrs);
+
+                let dst_name = eco_format!("unop.tmp.{}", UNARY_TMP.fetch_add(1, Relaxed));
+                let dst = tac::Place(dst_name);
+                let op = unary_op.to_tac(instrs);
+
+                instrs.push(tac::Instr::Unary {
+                    op,
+                    src,
+                    dst: dst.clone(),
+                });
+
+                tac::Value::Var(dst)
+            }
         }
     }
 }
@@ -77,7 +99,10 @@ pub enum UnaryOp {
     Negate,
 }
 impl Node for UnaryOp {
-    fn to_asm(&self) -> impl asm::Asm {
-        if true { todo!() } else { asm::Instr::Ret }
+    fn to_tac(&self, _: &mut Vec<tac::Instr>) -> tac::UnOp {
+        match self {
+            UnaryOp::Complement => tac::UnOp::Complement,
+            UnaryOp::Negate => tac::UnOp::Negate,
+        }
     }
 }

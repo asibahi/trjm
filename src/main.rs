@@ -22,7 +22,7 @@ fn main() -> ExitCode {
     };
     _ = remove_file(preprocessed);
 
-    if matches!(mode, (false, false, false)) {
+    if mode == [false; 4] {
         let res = assemble(&compiled);
         _ = remove_file(&compiled);
 
@@ -35,16 +35,17 @@ fn main() -> ExitCode {
     }
 }
 
-type Mode = (bool, bool, bool);
+type Mode = [bool; 4];
 
 fn parse() -> Result<(Mode, PathBuf), ExitCode> {
     let mut args = Arguments::from_env();
 
-    let mode = (
+    let mode = [
         args.contains("--lex"),
         args.contains("--parse"),
+        args.contains("--tacky"),
         args.contains("--codegen"),
-    );
+    ];
 
     // let assembly_only = args.contains("-S");
 

@@ -6,8 +6,7 @@ pub trait Assembly {
     fn emit_code(&self, f: &mut impl Write);
 
     fn replace_pseudos(&mut self, map: &mut FxHashMap<EcoString, u32>, stack_depth: &mut u32);
-    fn stack_frame(&mut self, stack_depth: u32);
-    fn validate_movs(&mut self);
+    fn adjust_instrs(&mut self, stack_depth: u32);
 }
 
 impl<T> Assembly for Vec<T>
@@ -23,12 +22,8 @@ where
             .for_each(|e| e.replace_pseudos(map, stack_depth));
     }
 
-    fn stack_frame(&mut self, stack_depth: u32) {
-        self.iter_mut().for_each(|e| e.stack_frame(stack_depth));
-    }
-
-    fn validate_movs(&mut self) {
-        self.iter_mut().for_each(Assembly::validate_movs);
+    fn adjust_instrs(&mut self, stack_depth: u32) {
+        self.iter_mut().for_each(|e| e.adjust_instrs(stack_depth));
     }
 }
 
@@ -40,8 +35,7 @@ impl Program {
         let mut stack_depth = 0;
 
         self.replace_pseudos(&mut map, &mut stack_depth);
-        self.stack_frame(stack_depth);
-        self.validate_movs();
+        self.adjust_instrs(stack_depth);
     }
 }
 impl Assembly for Program {
@@ -53,12 +47,8 @@ impl Assembly for Program {
         self.0.replace_pseudos(map, stack_depth);
     }
 
-    fn stack_frame(&mut self, stack_depth: u32) {
-        self.0.stack_frame(stack_depth);
-    }
-
-    fn validate_movs(&mut self) {
-        self.0.validate_movs();
+    fn adjust_instrs(&mut self, stack_depth: u32) {
+        self.0.adjust_instrs(stack_depth);
     }
 }
 
@@ -82,32 +72,34 @@ impl Assembly for FuncDef {
         self.instrs.replace_pseudos(map, stack_depth);
     }
 
-    fn stack_frame(&mut self, stack_depth: u32) {
-        self.instrs.insert(0, Instr::AllocateStack(stack_depth));
-    }
-
-    fn validate_movs(&mut self) {
-        let mut out = Vec::with_capacity(self.instrs.len());
-
-        for instr in std::mem::take(&mut self.instrs) {
-            match instr {
-                Instr::Mov {
-                    src: src @ Operand::Stack(_),
-                    dst: dst @ Operand::Stack(_),
-                } => out.extend([
-                    Instr::Mov {
-                        src,
-                        dst: Operand::Reg(Register::R10),
-                    },
-                    Instr::Mov {
-                        src: Operand::Reg(Register::R10),
-                        dst,
-                    },
-                ]),
-                other => out.push(other),
-            }
+    fn adjust_instrs(&mut self, stack_depth: u32) {
+        '_stack_frame: {
+            self.instrs.insert(0, Instr::AllocateStack(stack_depth));
         }
-        self.instrs = out;
+
+        '_validate_movs: {
+            let mut out = Vec::with_capacity(self.instrs.len());
+
+            for instr in std::mem::take(&mut self.instrs) {
+                match instr {
+                    Instr::Mov {
+                        src: src @ Operand::Stack(_),
+                        dst: dst @ Operand::Stack(_),
+                    } => out.extend([
+                        Instr::Mov {
+                            src,
+                            dst: Operand::Reg(Register::R10),
+                        },
+                        Instr::Mov {
+                            src: Operand::Reg(Register::R10),
+                            dst,
+                        },
+                    ]),
+                    other => out.push(other),
+                }
+            }
+            self.instrs = out;
+        }
     }
 }
 
@@ -160,8 +152,7 @@ impl Assembly for Instr {
         }
     }
 
-    fn stack_frame(&mut self, stack_depth: u32) {}
-    fn validate_movs(&mut self) {}
+    fn adjust_instrs(&mut self, _: u32) {}
 }
 
 #[derive(Debug, Clone)]
@@ -196,8 +187,7 @@ impl Assembly for Operand {
 
         std::mem::swap(self, &mut Operand::Stack(stack));
     }
-    fn stack_frame(&mut self, stack_depth: u32) {}
-    fn validate_movs(&mut self) {}
+    fn adjust_instrs(&mut self, _: u32) {}
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -213,9 +203,8 @@ impl Assembly for UnOp {
         }
     }
 
-    fn replace_pseudos(&mut self, map: &mut FxHashMap<EcoString, u32>, stack_depth: &mut u32) {}
-    fn stack_frame(&mut self, stack_depth: u32) {}
-    fn validate_movs(&mut self) {}
+    fn replace_pseudos(&mut self, _: &mut FxHashMap<EcoString, u32>, _: &mut u32) {}
+    fn adjust_instrs(&mut self, _: u32) {}
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -231,7 +220,6 @@ impl Assembly for Register {
         }
     }
 
-    fn replace_pseudos(&mut self, map: &mut FxHashMap<EcoString, u32>, stack_depth: &mut u32) {}
-    fn stack_frame(&mut self, stack_depth: u32) {}
-    fn validate_movs(&mut self) {}
+    fn replace_pseudos(&mut self, _: &mut FxHashMap<EcoString, u32>, _: &mut u32) {}
+    fn adjust_instrs(&mut self, _: u32) {}
 }

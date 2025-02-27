@@ -1,5 +1,3 @@
-#![expect(unused)]
-
 use std::{fs::read_to_string, io::Write, path::PathBuf};
 
 mod assembly;
@@ -10,10 +8,19 @@ mod tac;
 mod token;
 
 use assembly::Assembly;
-use ast::Node;
 use tac::Tac;
 
-pub fn compile(input: &PathBuf, [lex, parse, tacky, codegen]: [bool; 4]) -> Result<PathBuf, u8> {
+#[derive(Clone, Copy)]
+pub enum Mode {
+    Lex,
+    Parse,
+    Tac,
+    Codegen,
+    Assembly,
+    Compile,
+}
+
+pub fn compile(input: &PathBuf, mode: Mode) -> Result<PathBuf, u8> {
     let Ok(code) = read_to_string(input) else {
         eprintln!("Unable to read file.");
         return Err(2);
@@ -24,7 +31,7 @@ pub fn compile(input: &PathBuf, [lex, parse, tacky, codegen]: [bool; 4]) -> Resu
         return Err(3);
     };
 
-    if lex {
+    if matches!(mode, Mode::Lex) {
         eprintln!("{tokens:#?}");
         return Err(0);
     }
@@ -34,14 +41,14 @@ pub fn compile(input: &PathBuf, [lex, parse, tacky, codegen]: [bool; 4]) -> Resu
         return Err(4);
     };
 
-    if parse {
+    if matches!(mode, Mode::Parse) {
         eprintln!("{prgm:#?}");
         return Err(0);
     }
 
     let prgm = prgm.compile();
 
-    if tacky {
+    if matches!(mode, Mode::Tac) {
         eprintln!("{prgm:#?}");
         return Err(0);
     }
@@ -49,16 +56,20 @@ pub fn compile(input: &PathBuf, [lex, parse, tacky, codegen]: [bool; 4]) -> Resu
     let mut prgm: assembly::Program = prgm.to_asm();
     prgm.fixup_passes();
 
-    if codegen {
+    if matches!(mode, Mode::Codegen) {
         eprintln!("{prgm:#?}");
 
-        // let mut buf = Vec::new();
-        // prgm.emit_code(&mut buf);
+        let mut buf = Vec::new();
+        prgm.emit_code(&mut buf);
 
-        // let buf = String::from_utf8_lossy(&buf);
-        // eprintln!("{buf}");
+        let buf = String::from_utf8_lossy(&buf);
+        eprintln!("{buf}");
 
         return Err(0);
+    }
+
+    if matches!(mode, Mode::Assembly) {
+        unimplemented!("Part 3");
     }
 
     let output = input.with_extension("s");

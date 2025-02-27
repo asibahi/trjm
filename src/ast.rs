@@ -42,6 +42,7 @@ impl Node for FuncDef {
 #[derive(Debug)]
 pub enum Stmt {
     Return(Box<Expr>),
+    #[expect(unused)]
     If {
         cond: Box<Expr>,
         then: Box<Stmt>,
@@ -61,7 +62,7 @@ impl Node for Stmt {
 
                 ret
             }
-            Stmt::If { cond, then, else_ } => unimplemented!(),
+            Stmt::If { .. } => unimplemented!(),
         }
     }
 }

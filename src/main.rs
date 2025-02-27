@@ -25,7 +25,7 @@ fn main() -> ExitCode {
     };
     _ = remove_file(preprocessed);
 
-    if mode == [false; 4] {
+    if matches!(mode, trjm::Mode::Compile) {
         let res = assemble(&compiled);
         _ = remove_file(&compiled);
 
@@ -38,19 +38,23 @@ fn main() -> ExitCode {
     }
 }
 
-type Mode = [bool; 4];
-
-fn parse() -> Result<(Mode, PathBuf), ExitCode> {
+fn parse() -> Result<(trjm::Mode, PathBuf), ExitCode> {
     let mut args = Arguments::from_env();
 
-    let mode = [
+    let mode = match (
         args.contains("--lex"),
         args.contains("--parse"),
         args.contains("--tacky"),
         args.contains("--codegen"),
-    ];
-
-    // let assembly_only = args.contains("-S");
+        args.contains("--S"),
+    ) {
+        (true, ..) => trjm::Mode::Lex,
+        (_, true, ..) => trjm::Mode::Parse,
+        (_, _, true, ..) => trjm::Mode::Tac,
+        (.., true, _) => trjm::Mode::Codegen,
+        (.., true) => trjm::Mode::Assembly,
+        _ => trjm::Mode::Compile,
+    };
 
     match args.free_from_fn(validate_path) {
         Ok(i) => Ok((mode, i)),

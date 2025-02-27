@@ -80,7 +80,14 @@ impl Tac for Instr {
                 src2,
                 dst,
             } => match op {
-                BinOp::Add | BinOp::Subtract | BinOp::Multiply => {
+                BinOp::Add
+                | BinOp::Subtract
+                | BinOp::Multiply
+                | BinOp::BitAnd
+                | BinOp::BitOr
+                | BinOp::BitXor
+                | BinOp::LeftShift
+                | BinOp::RightShift => {
                     let dst = dst.to_asm();
                     vec![
                         assembly::Instr::Mov(src1.to_asm(), dst.clone()),
@@ -154,16 +161,28 @@ pub enum BinOp {
     Multiply,
     Divide,
     Reminder,
+
+    BitAnd,
+    BitOr,
+    BitXor,
+    LeftShift,
+    RightShift,
 }
 impl Tac for BinOp {
     type Output = assembly::Operator;
     fn to_asm(&self) -> Self::Output {
         match self {
-            BinOp::Add => assembly::Operator::Add,
-            BinOp::Subtract => assembly::Operator::Sub,
-            BinOp::Multiply => assembly::Operator::Mul,
+            Self::Add => assembly::Operator::Add,
+            Self::Subtract => assembly::Operator::Sub,
+            Self::Multiply => assembly::Operator::Mul,
 
-            BinOp::Divide | BinOp::Reminder => {
+            Self::BitAnd => assembly::Operator::And,
+            Self::BitOr => assembly::Operator::Or,
+            Self::BitXor => assembly::Operator::Xor,
+            Self::LeftShift => assembly::Operator::Shl,
+            Self::RightShift => assembly::Operator::Shr,
+
+            Self::Divide | Self::Reminder => {
                 unreachable!("Divide and Reminder are implemented in other ways")
             }
         }

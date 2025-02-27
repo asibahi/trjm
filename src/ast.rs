@@ -69,7 +69,17 @@ impl Node for Stmt {
 pub enum Expr {
     ConstInt(i32),
     Unary(UnaryOp, Box<Expr>),
-    Binary(BinaryOp, Box<Expr>, Box<Expr>),
+    Binary {
+        op: BinaryOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
+    #[allow(unused)]
+    Conditional {
+        cond: Box<Expr>,
+        then: Box<Expr>,
+        else_: Box<Expr>,
+    },
 }
 impl Node for Expr {
     type Output = tac::Value;
@@ -77,6 +87,7 @@ impl Node for Expr {
     fn to_tac(&self, instrs: &mut Vec<tac::Instr>) -> Self::Output {
         match self {
             Expr::ConstInt(i) => tac::Value::Const(*i as u32),
+            Expr::Unary(UnaryOp::Plus, expr) => expr.to_tac(instrs),
             Expr::Unary(unary_op, expr) => {
                 static UNARY_TMP: AtomicUsize = AtomicUsize::new(0);
 
@@ -94,7 +105,7 @@ impl Node for Expr {
 
                 tac::Value::Var(dst)
             }
-            Expr::Binary(binop, lhs, rhs) => {
+            Expr::Binary { op, lhs, rhs } => {
                 static BINARY_TMP: AtomicUsize = AtomicUsize::new(0);
 
                 let src1 = lhs.to_tac(instrs);
@@ -103,7 +114,7 @@ impl Node for Expr {
                 let dst_name = eco_format!("binop.tmp.{}", BINARY_TMP.fetch_add(1, Relaxed));
                 let dst = tac::Place(dst_name);
 
-                let op = binop.to_tac(instrs);
+                let op = op.to_tac(instrs);
 
                 instrs.push(tac::Instr::Binary {
                     op,
@@ -113,6 +124,7 @@ impl Node for Expr {
                 });
                 tac::Value::Var(dst)
             }
+            Expr::Conditional { .. } => todo!(),
         }
     }
 }
@@ -121,6 +133,7 @@ impl Node for Expr {
 pub enum UnaryOp {
     Complement,
     Negate,
+    Plus,
 }
 impl Node for UnaryOp {
     type Output = tac::UnOp;
@@ -128,6 +141,8 @@ impl Node for UnaryOp {
         match self {
             UnaryOp::Complement => tac::UnOp::Complement,
             UnaryOp::Negate => tac::UnOp::Negate,
+
+            UnaryOp::Plus => unreachable!("noop operation"),
         }
     }
 }
@@ -139,6 +154,12 @@ pub enum BinaryOp {
     Multiply,
     Divide,
     Reminder,
+
+    BitAnd,
+    BitOr,
+    BitXor,
+    LeftShift,
+    RightShift,
 }
 impl Node for BinaryOp {
     type Output = tac::BinOp;
@@ -149,6 +170,12 @@ impl Node for BinaryOp {
             BinaryOp::Multiply => tac::BinOp::Multiply,
             BinaryOp::Divide => tac::BinOp::Divide,
             BinaryOp::Reminder => tac::BinOp::Reminder,
+
+            BinaryOp::BitAnd => tac::BinOp::BitAnd,
+            BinaryOp::BitOr => tac::BinOp::BitOr,
+            BinaryOp::BitXor => tac::BinOp::BitXor,
+            BinaryOp::LeftShift => tac::BinOp::LeftShift,
+            BinaryOp::RightShift => tac::BinOp::RightShift,
         }
     }
 }

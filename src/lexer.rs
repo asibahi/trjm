@@ -27,6 +27,16 @@ pub fn lex(i: &str) -> Result<Vec<Token>, LexError<'_>> {
         tilde,
         bang,
         //
+        ambersand,
+        pipe,
+        caret,
+        //
+        left_shift,
+        right_shift,
+        //
+        question_mark,
+        colon,
+        //
         semicolon,
         paren_open,
         paren_close,
@@ -73,6 +83,17 @@ token!(forward_slash, ForwardSlash, "/");
 token!(percent, Percent, "%");
 token!(tilde, Tilde, "~");
 token!(bang, Bang, "!");
+
+token!(ambersand, Ambersand, "&");
+token!(pipe, Pipe, "|");
+token!(caret, Caret, "^");
+
+token!(question_mark, QuestionMark, "?");
+token!(colon, Colon, ":");
+
+// should later be into a famly
+token!(left_shift, LeftShift, "<<");
+token!(right_shift, RightShift, ">>");
 
 token!(semicolon, Semicolon, ";");
 token!(paren_open, ParenOpen, "(");

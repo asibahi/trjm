@@ -23,9 +23,17 @@ pub(crate) enum Token {
     Tilde,
     Hyphen,
     Bang,
+    Ambersand,
+    Pipe,
+    Caret,
 
     Increment,
     Decrement,
+    LeftShift,
+    RightShift,
+
+    QuestionMark,
+    Colon,
 
     // Punctuation
     ParenOpen,

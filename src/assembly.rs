@@ -77,7 +77,7 @@ impl Assembly for FuncDef {
             self.instrs.insert(0, Instr::AllocateStack(stack_depth));
         }
 
-        '_validate_movs: {
+        '_fixup_instrs: {
             let mut out = Vec::with_capacity(self.instrs.len());
 
             for instr in std::mem::take(&mut self.instrs) {
@@ -91,7 +91,11 @@ impl Assembly for FuncDef {
                         Instr::Idiv(Operand::Reg(Register::R10)),
                     ]),
                     Instr::Binary(
-                        opp @ (Operator::Add | Operator::Sub),
+                        opp @ (Operator::Add
+                        | Operator::Sub
+                        | Operator::And
+                        | Operator::Or
+                        | Operator::Xor),
                         src @ Operand::Stack(_),
                         dst @ Operand::Stack(_),
                     ) => out.extend([
@@ -102,6 +106,14 @@ impl Assembly for FuncDef {
                         Instr::Mov(dst.clone(), Operand::Reg(Register::R11)),
                         Instr::Binary(Operator::Mul, src, Operand::Reg(Register::R11)),
                         Instr::Mov(Operand::Reg(Register::R11), dst),
+                    ]),
+                    Instr::Binary(
+                        opp @ (Operator::Shl | Operator::Shr),
+                        src,
+                        dst @ Operand::Stack(_),
+                    ) => out.extend([
+                        Instr::Mov(src, Operand::Reg(Register::CX)),
+                        Instr::Binary(opp, Operand::Reg(Register::CL), dst),
                     ]),
                     other => out.push(other),
                 }
@@ -220,21 +232,32 @@ impl Assembly for Operand {
 
 #[derive(Debug, Clone, Copy)]
 pub enum Operator {
+    // unary
     Not,
     Neg,
+    // binary
     Add,
     Sub,
     Mul,
+    And,
+    Or,
+    Xor,
+    Shr,
+    Shl,
 }
 impl Assembly for Operator {
     fn emit_code(&self, f: &mut impl Write) {
         match self {
             Operator::Not => _ = write!(f, "notl"),
             Operator::Neg => _ = write!(f, "negl"),
-
             Operator::Add => _ = write!(f, "addl"),
             Operator::Sub => _ = write!(f, "subl"),
             Operator::Mul => _ = write!(f, "imull"),
+            Operator::And => _ = write!(f, "andl"),
+            Operator::Or => _ = write!(f, "orl"),
+            Operator::Xor => _ = write!(f, "xorl"),
+            Operator::Shr => _ = write!(f, "sarl"),
+            Operator::Shl => _ = write!(f, "shll"),
         }
     }
 
@@ -242,22 +265,24 @@ impl Assembly for Operator {
     fn adjust_instrs(&mut self, _: u32) {}
 }
 
-
 #[derive(Debug, Clone, Copy)]
 pub enum Register {
     AX,
     DX,
     R10,
     R11,
+    CX,
+    CL,
 }
 impl Assembly for Register {
     fn emit_code(&self, f: &mut impl Write) {
         match self {
             Register::AX => _ = write!(f, "%eax"),
             Register::DX => _ = write!(f, "%edx"),
-
             Register::R10 => _ = write!(f, "%r10d"),
             Register::R11 => _ = write!(f, "%r11d"),
+            Register::CX => _ = write!(f, "%ecx"),
+            Register::CL => _ = write!(f, "%cl"),
         }
     }
 

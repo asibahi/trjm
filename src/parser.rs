@@ -2,6 +2,7 @@ use crate::{
     ast::*,
     token::{Token, Tokens},
 };
+use either::Either::{Left, Right};
 use nom::{
     Finish, IResult, Parser,
     branch::alt,
@@ -32,6 +33,9 @@ fn parse_program(i: Tokens<'_>) -> IResult<Tokens<'_>, Program, ParseError<'_>> 
 macro_rules! tag_token {
     ($token:pat) => {
         verify(take(1u8), |t: &Tokens| matches!(t.0[0], $token))
+    };
+    (bin: $token:pat, $binop:expr) => {
+        tag_token!($token).map(|_| $binop).map(Left)
     };
 }
 
@@ -67,17 +71,41 @@ fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
     .process::<Emit>(i)
 }
 
+macro_rules! binop {
+    ($token:pat, $binop:expr) => {
+        tag_token!($token).map(|_| $binop).map(Left)
+    };
+}
+
 fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
+    // precedence reference:
+    // https://en.cppreference.com/w/c/language/operator_precedence
+
     // Prefix expressions
     let neg = tag_token!(Token::Hyphen).map(|_| UnaryOp::Negate);
     let compl = tag_token!(Token::Tilde).map(|_| UnaryOp::Complement);
+    let plus = tag_token!(Token::Plus).map(|_| UnaryOp::Plus);
 
     // Infix expressions
-    let add = tag_token!(Token::Plus).map(|_| BinaryOp::Add);
-    let sub = tag_token!(Token::Hyphen).map(|_| BinaryOp::Subtract);
-    let mul = tag_token!(Token::Astrisk).map(|_| BinaryOp::Multiply);
-    let div = tag_token!(Token::ForwardSlash).map(|_| BinaryOp::Divide);
-    let rem = tag_token!(Token::Percent).map(|_| BinaryOp::Reminder);
+    let add = binop!(Token::Plus, BinaryOp::Add);
+    let sub = binop!(Token::Hyphen, BinaryOp::Subtract);
+    let mul = binop!(Token::Astrisk, BinaryOp::Multiply);
+    let div = binop!(Token::ForwardSlash, BinaryOp::Divide);
+    let rem = binop!(Token::Percent, BinaryOp::Reminder);
+
+    let bit_and = binop!(Token::Ambersand, BinaryOp::BitAnd);
+    let bit_or = binop!(Token::Pipe, BinaryOp::BitOr);
+    let bit_xor = binop!(Token::Caret, BinaryOp::BitXor);
+
+    let shl = binop!(Token::LeftShift, BinaryOp::LeftShift);
+    let shr = binop!(Token::RightShift, BinaryOp::RightShift);
+
+    let ternary = delimited(
+        tag_token!(Token::QuestionMark),
+        parse_expr,
+        tag_token!(Token::Colon),
+    )
+    .map(Right);
 
     // Operand expressions
     let const_expr = tag_token!(Token::NumberLiteral(_))
@@ -92,21 +120,22 @@ fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
 
     precedence(
         // prefix
-        alt((
-            // neg
-            unary_op(1, neg),
-            // compl
-            unary_op(1, compl),
-        )),
+        alt((unary_op(2, neg), unary_op(2, compl), unary_op(2, plus))),
         // postfix
         fail(),
         // binary
         alt((
-            binary_op(2, Assoc::Left, mul),
-            binary_op(2, Assoc::Left, div),
-            binary_op(2, Assoc::Left, rem),
-            binary_op(3, Assoc::Left, add),
-            binary_op(3, Assoc::Left, sub),
+            binary_op(3, Assoc::Left, mul),
+            binary_op(3, Assoc::Left, div),
+            binary_op(3, Assoc::Left, rem),
+            binary_op(4, Assoc::Left, add),
+            binary_op(4, Assoc::Left, sub),
+            binary_op(5, Assoc::Left, shl),
+            binary_op(5, Assoc::Left, shr),
+            binary_op(8, Assoc::Left, bit_and),
+            binary_op(9, Assoc::Left, bit_xor),
+            binary_op(10, Assoc::Left, bit_or),
+            binary_op(13, Assoc::Right, ternary),
         )),
         // operand
         alt((
@@ -116,7 +145,16 @@ fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
         // fold
         |op: Operation<_, UnaryOp, _, _>| match op {
             Operation::Prefix(op, o) => Ok(Expr::Unary(op, Box::new(o))),
-            Operation::Binary(lhs, op, rhs) => Ok(Expr::Binary(op, Box::new(lhs), Box::new(rhs))),
+            Operation::Binary(lhs, Left(op), rhs) => Ok(Expr::Binary {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            }),
+            Operation::Binary(lhs, Right(op), rhs) => Ok(Expr::Conditional {
+                cond: Box::new(lhs),
+                then: Box::new(op),
+                else_: Box::new(rhs),
+            }),
             Operation::Postfix(..) => Err("Invalid combination"),
         },
     )(i)

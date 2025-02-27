@@ -6,9 +6,10 @@ use nom::{
     Finish, IResult, Parser,
     branch::alt,
     bytes::take,
-    combinator::{all_consuming, verify},
+    combinator::{all_consuming, fail, verify},
     sequence::delimited,
 };
+use nom_language::precedence::{Assoc, Operation, binary_op, precedence, unary_op};
 
 type ParseError<'s> = ();
 // type ParseError<'s> = (Tokens<'s>, nom::ErrorKind);
@@ -67,24 +68,56 @@ fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
 }
 
 fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
+    // Prefix expressions
+    let neg = tag_token!(Token::Hyphen).map(|_| UnaryOp::Negate);
+    let compl = tag_token!(Token::Tilde).map(|_| UnaryOp::Complement);
+
+    // Infix expressions
+    let add = tag_token!(Token::Plus).map(|_| BinaryOp::Add);
+    let sub = tag_token!(Token::Hyphen).map(|_| BinaryOp::Subtract);
+    let mul = tag_token!(Token::Astrisk).map(|_| BinaryOp::Multiply);
+    let div = tag_token!(Token::ForwardSlash).map(|_| BinaryOp::Divide);
+    let rem = tag_token!(Token::Percent).map(|_| BinaryOp::Reminder);
+
+    // Operand expressions
     let const_expr = tag_token!(Token::NumberLiteral(_))
         .map_opt(|t: Tokens<'_>| t.0[0].unwrap_number().map(Expr::ConstInt));
-
-    let unop = (parse_unop, parse_expr).map(|(u, e)| Expr::Unary(u, Box::new(e)));
-
     let grp_expr = delimited(
         tag_token!(Token::ParenOpen),
         parse_expr,
         tag_token!(Token::ParenClose),
     );
 
-    alt((const_expr, unop, grp_expr)).process::<Emit>(i)
-}
+    // where does the ternary fit in?
 
-fn parse_unop(i: Tokens<'_>) -> IResult<Tokens<'_>, UnaryOp, ParseError<'_>> {
-    // parse constant expression
-    let neg = tag_token!(Token::Hyphen).map(|_| UnaryOp::Negate);
-    let compl = tag_token!(Token::Tilde).map(|_| UnaryOp::Complement);
-
-    alt((neg, compl)).process::<Emit>(i)
+    precedence(
+        // prefix
+        alt((
+            // neg
+            unary_op(1, neg),
+            // compl
+            unary_op(1, compl),
+        )),
+        // postfix
+        fail(),
+        // binary
+        alt((
+            binary_op(2, Assoc::Left, mul),
+            binary_op(2, Assoc::Left, div),
+            binary_op(2, Assoc::Left, rem),
+            binary_op(3, Assoc::Left, add),
+            binary_op(3, Assoc::Left, sub),
+        )),
+        // operand
+        alt((
+            const_expr, // const
+            grp_expr,   // grp
+        )),
+        // fold
+        |op: Operation<_, UnaryOp, _, _>| match op {
+            Operation::Prefix(op, o) => Ok(Expr::Unary(op, Box::new(o))),
+            Operation::Binary(lhs, op, rhs) => Ok(Expr::Binary(op, Box::new(lhs), Box::new(rhs))),
+            Operation::Postfix(..) => Err("Invalid combination"),
+        },
+    )(i)
 }

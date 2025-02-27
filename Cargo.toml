@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 ecow = "0.2.3"
 nom = "8"
+nom-language = "0.1.0"
 pico-args = "0.5.0"
 rustc-hash = "2.1.1"
 

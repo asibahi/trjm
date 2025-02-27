@@ -1,4 +1,4 @@
-#![allow(refining_impl_trait_internal)]
+
 
 use crate::tac;
 use ecow::{EcoString, eco_format};
@@ -9,7 +9,7 @@ pub trait Node {
     fn to_tac(&self, instrs: &mut Vec<tac::Instr>) -> Self::Output;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Program(pub FuncDef);
 impl Program {
     pub fn compile(&self) -> tac::Program {
@@ -24,7 +24,7 @@ impl Node for Program {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FuncDef {
     pub name: EcoString,
     pub body: Stmt,
@@ -39,7 +39,7 @@ impl Node for FuncDef {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Stmt {
     Return(Box<Expr>),
     #[expect(unused)]
@@ -67,10 +67,11 @@ impl Node for Stmt {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expr {
     ConstInt(i32),
     Unary(UnaryOp, Box<Expr>),
+    Binary(BinaryOp, Box<Expr>, Box<Expr>),
 }
 impl Node for Expr {
     type Output = tac::Value;
@@ -95,11 +96,12 @@ impl Node for Expr {
 
                 tac::Value::Var(dst)
             }
+            Expr::Binary(..) => todo!(),
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum UnaryOp {
     Complement,
     Negate,
@@ -110,6 +112,27 @@ impl Node for UnaryOp {
         match self {
             UnaryOp::Complement => tac::UnOp::Complement,
             UnaryOp::Negate => tac::UnOp::Negate,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BinaryOp {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Reminder,
+}
+impl Node for BinaryOp {
+    type Output = tac::UnOp;
+    fn to_tac(&self, _: &mut Vec<tac::Instr>) -> Self::Output {
+        match self {
+            BinaryOp::Add => todo!(),
+            BinaryOp::Subtract => todo!(),
+            BinaryOp::Multiply => todo!(),
+            BinaryOp::Divide => todo!(),
+            BinaryOp::Reminder => todo!(),
         }
     }
 }

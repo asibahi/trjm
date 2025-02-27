@@ -61,19 +61,16 @@ impl Tac for Instr {
     fn to_asm(&self) -> Self::Output {
         match self {
             Instr::Return(value) => vec![
-                assembly::Instr::Mov {
-                    src: value.to_asm(),
-                    dst: assembly::Operand::Reg(assembly::Register::AX),
-                },
+                assembly::Instr::Mov(
+                    value.to_asm(),
+                    assembly::Operand::Reg(assembly::Register::AX),
+                ),
                 assembly::Instr::Ret,
             ],
             Instr::Unary { op, src, dst } => {
                 let dst = dst.to_asm();
                 vec![
-                    assembly::Instr::Mov {
-                        src: src.to_asm(),
-                        dst: dst.clone(),
-                    },
+                    assembly::Instr::Mov(src.to_asm(), dst.clone()),
                     assembly::Instr::Unary(op.to_asm(), dst),
                 ]
             }
@@ -82,7 +79,31 @@ impl Tac for Instr {
                 src1,
                 src2,
                 dst,
-            } => todo!(),
+            } => match op {
+                BinOp::Add | BinOp::Subtract | BinOp::Multiply => {
+                    let dst = dst.to_asm();
+                    vec![
+                        assembly::Instr::Mov(src1.to_asm(), dst.clone()),
+                        assembly::Instr::Binary(op.to_asm(), src2.to_asm(), dst),
+                    ]
+                }
+                BinOp::Divide | BinOp::Reminder => {
+                    let res = match op {
+                        BinOp::Divide => assembly::Register::AX,
+                        BinOp::Reminder => assembly::Register::DX,
+                        _ => unreachable!(),
+                    };
+                    vec![
+                        assembly::Instr::Mov(
+                            src1.to_asm(),
+                            assembly::Operand::Reg(assembly::Register::AX),
+                        ),
+                        assembly::Instr::Cdq,
+                        assembly::Instr::Idiv(src2.to_asm()),
+                        assembly::Instr::Mov(assembly::Operand::Reg(res), dst.to_asm()),
+                    ]
+                }
+            },
         }
     }
 }
@@ -117,11 +138,11 @@ pub enum UnOp {
     Negate,
 }
 impl Tac for UnOp {
-    type Output = assembly::UnOp;
+    type Output = assembly::Operator;
     fn to_asm(&self) -> Self::Output {
         match self {
-            UnOp::Complement => assembly::UnOp::Not,
-            UnOp::Negate => assembly::UnOp::Neg,
+            UnOp::Complement => assembly::Operator::Not,
+            UnOp::Negate => assembly::Operator::Neg,
         }
     }
 }
@@ -135,14 +156,16 @@ pub enum BinOp {
     Reminder,
 }
 impl Tac for BinOp {
-    type Output = assembly::UnOp;
+    type Output = assembly::Operator;
     fn to_asm(&self) -> Self::Output {
         match self {
-            BinOp::Add => todo!(),
-            BinOp::Subtract => todo!(),
-            BinOp::Multiply => todo!(),
-            BinOp::Divide => todo!(),
-            BinOp::Reminder => todo!(),
+            BinOp::Add => assembly::Operator::Add,
+            BinOp::Subtract => assembly::Operator::Sub,
+            BinOp::Multiply => assembly::Operator::Mul,
+
+            BinOp::Divide | BinOp::Reminder => {
+                unreachable!("Divide and Reminder are implemented in other ways")
+            }
         }
     }
 }

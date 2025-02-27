@@ -82,18 +82,26 @@ impl Assembly for FuncDef {
 
             for instr in std::mem::take(&mut self.instrs) {
                 match instr {
-                    Instr::Mov {
-                        src: src @ Operand::Stack(_),
-                        dst: dst @ Operand::Stack(_),
-                    } => out.extend([
-                        Instr::Mov {
-                            src,
-                            dst: Operand::Reg(Register::R10),
-                        },
-                        Instr::Mov {
-                            src: Operand::Reg(Register::R10),
-                            dst,
-                        },
+                    Instr::Mov(src @ Operand::Stack(_), dst @ Operand::Stack(_)) => out.extend([
+                        Instr::Mov(src, Operand::Reg(Register::R10)),
+                        Instr::Mov(Operand::Reg(Register::R10), dst),
+                    ]),
+                    Instr::Idiv(v @ Operand::Imm(_)) => out.extend([
+                        Instr::Mov(v, Operand::Reg(Register::R10)),
+                        Instr::Idiv(Operand::Reg(Register::R10)),
+                    ]),
+                    Instr::Binary(
+                        opp @ (Operator::Add | Operator::Sub),
+                        src @ Operand::Stack(_),
+                        dst @ Operand::Stack(_),
+                    ) => out.extend([
+                        Instr::Mov(src, Operand::Reg(Register::R10)),
+                        Instr::Binary(opp, Operand::Reg(Register::R10), dst),
+                    ]),
+                    Instr::Binary(Operator::Mul, src, dst @ Operand::Stack(_)) => out.extend([
+                        Instr::Mov(dst.clone(), Operand::Reg(Register::R11)),
+                        Instr::Binary(Operator::Mul, src, Operand::Reg(Register::R11)),
+                        Instr::Mov(Operand::Reg(Register::R11), dst),
                     ]),
                     other => out.push(other),
                 }
@@ -105,25 +113,23 @@ impl Assembly for FuncDef {
 
 #[derive(Debug, Clone)]
 pub enum Instr {
-    Mov { src: Operand, dst: Operand },
-    Unary(UnOp, Operand),
+    Mov(Operand, Operand),
+    Unary(Operator, Operand),
+    Binary(Operator, Operand, Operand),
+    Idiv(Operand),
+    Cdq,
     AllocateStack(u32),
     Ret,
 }
 impl Assembly for Instr {
     fn emit_code(&self, f: &mut impl Write) {
         match self {
-            Self::Mov { src, dst } => {
+            Self::Mov(src, dst) => {
                 _ = write!(f, "\tmovl ");
                 src.emit_code(f);
                 _ = write!(f, ", ");
                 dst.emit_code(f);
                 _ = writeln!(f);
-            }
-            Self::Ret => {
-                _ = writeln!(f, "\tmovq %rbp, %rsp");
-                _ = writeln!(f, "\tpopq %rbp");
-                _ = writeln!(f, "\tret");
             }
             Instr::Unary(un_op, operand) => {
                 _ = write!(f, "\t");
@@ -132,23 +138,45 @@ impl Assembly for Instr {
                 operand.emit_code(f);
                 _ = writeln!(f);
             }
-            Instr::AllocateStack(i) => {
-                _ = writeln!(f, "\tsubq ${i}, %rsp");
+            Instr::Binary(bin_op, op1, op2) => {
+                _ = write!(f, "\t");
+                bin_op.emit_code(f);
+                _ = write!(f, " ");
+                op1.emit_code(f);
+                _ = write!(f, ", ");
+                op2.emit_code(f);
+                _ = writeln!(f);
+            }
+            Instr::Idiv(operand) => {
+                _ = write!(f, "\tidivl ");
+                operand.emit_code(f);
+                _ = writeln!(f);
+            }
+            Instr::Cdq => _ = writeln!(f, "\tcdq"),
+            Instr::AllocateStack(i) => _ = writeln!(f, "\tsubq ${i}, %rsp"),
+            Self::Ret => {
+                _ = writeln!(f, "\tmovq %rbp, %rsp");
+                _ = writeln!(f, "\tpopq %rbp");
+                _ = writeln!(f, "\tret");
             }
         }
     }
 
     fn replace_pseudos(&mut self, map: &mut FxHashMap<EcoString, u32>, stack_depth: &mut u32) {
         match self {
-            Instr::Mov { src, dst } => {
+            Instr::Mov(src, dst) => {
                 src.replace_pseudos(map, stack_depth);
                 dst.replace_pseudos(map, stack_depth);
             }
-            Instr::Unary(un_op, operand) => {
-                un_op.replace_pseudos(map, stack_depth);
-                operand.replace_pseudos(map, stack_depth);
+            Instr::Unary(_, opp) | Instr::Idiv(opp) => {
+                opp.replace_pseudos(map, stack_depth);
             }
-            Instr::AllocateStack(_) | Instr::Ret => (),
+            Instr::Binary(bin_op, opp1, opp2) => {
+                bin_op.replace_pseudos(map, stack_depth);
+                opp1.replace_pseudos(map, stack_depth);
+                opp2.replace_pseudos(map, stack_depth);
+            }
+            Instr::Cdq | Instr::AllocateStack(_) | Instr::Ret => (),
         }
     }
 
@@ -191,15 +219,22 @@ impl Assembly for Operand {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum UnOp {
+pub enum Operator {
     Not,
     Neg,
+    Add,
+    Sub,
+    Mul,
 }
-impl Assembly for UnOp {
+impl Assembly for Operator {
     fn emit_code(&self, f: &mut impl Write) {
         match self {
-            UnOp::Not => _ = write!(f, "notl"),
-            UnOp::Neg => _ = write!(f, "negl"),
+            Operator::Not => _ = write!(f, "notl"),
+            Operator::Neg => _ = write!(f, "negl"),
+
+            Operator::Add => _ = write!(f, "addl"),
+            Operator::Sub => _ = write!(f, "subl"),
+            Operator::Mul => _ = write!(f, "imull"),
         }
     }
 
@@ -207,16 +242,22 @@ impl Assembly for UnOp {
     fn adjust_instrs(&mut self, _: u32) {}
 }
 
+
 #[derive(Debug, Clone, Copy)]
 pub enum Register {
     AX,
+    DX,
     R10,
+    R11,
 }
 impl Assembly for Register {
     fn emit_code(&self, f: &mut impl Write) {
         match self {
             Register::AX => _ = write!(f, "%eax"),
+            Register::DX => _ = write!(f, "%edx"),
+
             Register::R10 => _ = write!(f, "%r10d"),
+            Register::R11 => _ = write!(f, "%r11d"),
         }
     }
 

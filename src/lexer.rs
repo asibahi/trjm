@@ -18,30 +18,23 @@ type Check = nom::OutputM<nom::Check, nom::Emit, nom::Complete>;
 
 pub fn lex(i: &str) -> Result<Vec<Token>, LexError<'_>> {
     let tokens = alt((
-        dec_family,
-        inc_family,
+        alt((decrement, hyphen)),
+        alt((incrmeent, plus)),
         //
-        asterisk,
-        forward_slash,
-        percent,
-        tilde,
-        bang,
+        alt((asterisk, forward_slash, percent, tilde)),
         //
-        ambersand,
-        pipe,
-        caret,
+        alt((dbl_equal, equal)),
+        alt((bang_equal, bang)),
         //
-        left_shift,
-        right_shift,
+        alt((dbl_ambersand, dbl_pipe, ambersand, pipe, caret)),
+        //
+        alt((left_shift, less_equal, less_than)),
+        alt((right_shift, greater_equal, greater_than)),
         //
         question_mark,
         colon,
         //
-        semicolon,
-        paren_open,
-        paren_close,
-        brace_open,
-        brace_close,
+        alt((semicolon, paren_open, paren_close, brace_open, brace_close)),
         //
         identifier,
         number,
@@ -71,19 +64,22 @@ macro_rules! token {
 token!(decrement, Decrement, "--");
 token!(hyphen, Hyphen, "-");
 
-token!(dec_family, alt((decrement, hyphen)));
-
 token!(incrmeent, Increment, "++");
 token!(plus, Plus, "+");
-
-token!(inc_family, alt((incrmeent, plus)));
 
 token!(asterisk, Astrisk, "*");
 token!(forward_slash, ForwardSlash, "/");
 token!(percent, Percent, "%");
 token!(tilde, Tilde, "~");
+
+token!(dbl_equal, DblEqual, "==");
+token!(equal, Equal, "=");
+
+token!(bang_equal, BangEqual, "!=");
 token!(bang, Bang, "!");
 
+token!(dbl_ambersand, DblAmbersand, "&&");
+token!(dbl_pipe, DblPipe, "||");
 token!(ambersand, Ambersand, "&");
 token!(pipe, Pipe, "|");
 token!(caret, Caret, "^");
@@ -93,13 +89,19 @@ token!(colon, Colon, ":");
 
 // should later be into a famly
 token!(left_shift, LeftShift, "<<");
+token!(less_equal, LessEqual, "<=");
+token!(less_than, LessThan, "<");
+
 token!(right_shift, RightShift, ">>");
+token!(greater_equal, GreaterEqual, ">=");
+token!(greater_than, GreaterThan, ">");
 
 token!(semicolon, Semicolon, ";");
 token!(paren_open, ParenOpen, "(");
 token!(paren_close, ParenClose, ")");
 token!(brace_open, BraceOpen, "{");
 token!(brace_close, BraceClose, "}");
+
 token!(
     identifier,
     recognize(preceded(

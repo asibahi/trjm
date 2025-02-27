@@ -22,15 +22,26 @@ pub(crate) enum Token {
     Percent,
     Tilde,
     Hyphen,
+
+    DblEqual,
+    Equal,
     Bang,
+    BangEqual,
     Ambersand,
+    DblAmbersand,
     Pipe,
+    DblPipe,
     Caret,
+
+    LessThan, // <
+    GreaterThan, // >
+    LessEqual, // <=
+    GreaterEqual, // >=
 
     Increment,
     Decrement,
-    LeftShift,
-    RightShift,
+    LeftShift, // <<
+    RightShift, // >>
 
     QuestionMark,
     Colon,

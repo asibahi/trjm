@@ -1,5 +1,3 @@
-
-
 use crate::tac;
 use ecow::{EcoString, eco_format};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
@@ -96,7 +94,25 @@ impl Node for Expr {
 
                 tac::Value::Var(dst)
             }
-            Expr::Binary(..) => todo!(),
+            Expr::Binary(binop, lhs, rhs) => {
+                static BINARY_TMP: AtomicUsize = AtomicUsize::new(0);
+
+                let src1 = lhs.to_tac(instrs);
+                let src2 = rhs.to_tac(instrs);
+
+                let dst_name = eco_format!("binop.tmp.{}", BINARY_TMP.fetch_add(1, Relaxed));
+                let dst = tac::Place(dst_name);
+
+                let op = binop.to_tac(instrs);
+
+                instrs.push(tac::Instr::Binary {
+                    op,
+                    src1,
+                    src2,
+                    dst: dst.clone(),
+                });
+                tac::Value::Var(dst)
+            }
         }
     }
 }
@@ -125,14 +141,14 @@ pub enum BinaryOp {
     Reminder,
 }
 impl Node for BinaryOp {
-    type Output = tac::UnOp;
+    type Output = tac::BinOp;
     fn to_tac(&self, _: &mut Vec<tac::Instr>) -> Self::Output {
         match self {
-            BinaryOp::Add => todo!(),
-            BinaryOp::Subtract => todo!(),
-            BinaryOp::Multiply => todo!(),
-            BinaryOp::Divide => todo!(),
-            BinaryOp::Reminder => todo!(),
+            BinaryOp::Add => tac::BinOp::Add,
+            BinaryOp::Subtract => tac::BinOp::Subtract,
+            BinaryOp::Multiply => tac::BinOp::Multiply,
+            BinaryOp::Divide => tac::BinOp::Divide,
+            BinaryOp::Reminder => tac::BinOp::Reminder,
         }
     }
 }

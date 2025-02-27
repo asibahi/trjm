@@ -44,7 +44,17 @@ impl Tac for FuncDef {
 #[derive(Debug, Clone)]
 pub enum Instr {
     Return(Value),
-    Unary { op: UnOp, src: Value, dst: Place },
+    Unary {
+        op: UnOp,
+        src: Value,
+        dst: Place,
+    },
+    Binary {
+        op: BinOp,
+        src1: Value,
+        src2: Value,
+        dst: Place,
+    },
 }
 impl Tac for Instr {
     type Output = Vec<assembly::Instr>;
@@ -67,6 +77,12 @@ impl Tac for Instr {
                     assembly::Instr::Unary(op.to_asm(), dst),
                 ]
             }
+            Instr::Binary {
+                op,
+                src1,
+                src2,
+                dst,
+            } => todo!(),
         }
     }
 }
@@ -95,7 +111,7 @@ impl Tac for Place {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum UnOp {
     Complement,
     Negate,
@@ -106,6 +122,27 @@ impl Tac for UnOp {
         match self {
             UnOp::Complement => assembly::UnOp::Not,
             UnOp::Negate => assembly::UnOp::Neg,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BinOp {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Reminder,
+}
+impl Tac for BinOp {
+    type Output = assembly::UnOp;
+    fn to_asm(&self) -> Self::Output {
+        match self {
+            BinOp::Add => todo!(),
+            BinOp::Subtract => todo!(),
+            BinOp::Multiply => todo!(),
+            BinOp::Divide => todo!(),
+            BinOp::Reminder => todo!(),
         }
     }
 }

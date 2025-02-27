@@ -34,9 +34,6 @@ macro_rules! tag_token {
     ($token:pat) => {
         verify(take(1u8), |t: &Tokens| matches!(t.0[0], $token))
     };
-    (bin: $token:pat, $binop:expr) => {
-        tag_token!($token).map(|_| $binop).map(Left)
-    };
 }
 
 fn parse_func(i: Tokens<'_>) -> IResult<Tokens<'_>, FuncDef, ParseError<'_>> {
@@ -84,6 +81,7 @@ fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
     // Prefix expressions
     let neg = tag_token!(Token::Hyphen).map(|_| UnaryOp::Negate);
     let compl = tag_token!(Token::Tilde).map(|_| UnaryOp::Complement);
+    let not = tag_token!(Token::Bang).map(|_| UnaryOp::Not);
     let plus = tag_token!(Token::Plus).map(|_| UnaryOp::Plus);
 
     // Infix expressions
@@ -93,12 +91,24 @@ fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
     let div = binop!(Token::ForwardSlash, BinaryOp::Divide);
     let rem = binop!(Token::Percent, BinaryOp::Reminder);
 
+    // chapter 3 extra credit
     let bit_and = binop!(Token::Ambersand, BinaryOp::BitAnd);
     let bit_or = binop!(Token::Pipe, BinaryOp::BitOr);
     let bit_xor = binop!(Token::Caret, BinaryOp::BitXor);
 
     let shl = binop!(Token::LeftShift, BinaryOp::LeftShift);
     let shr = binop!(Token::RightShift, BinaryOp::RightShift);
+
+    // chapter 4
+    let eq = binop!(Token::DblEqual, BinaryOp::Equal);
+    let ne = binop!(Token::BangEqual, BinaryOp::NotEqual);
+    let and = binop!(Token::DblAmbersand, BinaryOp::And);
+    let or = binop!(Token::DblPipe, BinaryOp::Or);
+
+    let lt = binop!(Token::LessThan, BinaryOp::LessThan);
+    let le = binop!(Token::LessEqual, BinaryOp::LessOrEqual);
+    let gt = binop!(Token::GreaterThan, BinaryOp::GreaterThan);
+    let ge = binop!(Token::GreaterEqual, BinaryOp::GreaterOrEqual);
 
     let ternary = delimited(
         tag_token!(Token::QuestionMark),
@@ -120,7 +130,12 @@ fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
 
     precedence(
         // prefix
-        alt((unary_op(2, neg), unary_op(2, compl), unary_op(2, plus))),
+        alt((
+            unary_op(2, neg),
+            unary_op(2, compl),
+            unary_op(2, not),
+            unary_op(2, plus),
+        )),
         // postfix
         fail(),
         // binary
@@ -130,12 +145,24 @@ fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
             binary_op(3, Assoc::Left, rem),
             binary_op(4, Assoc::Left, add),
             binary_op(4, Assoc::Left, sub),
-            binary_op(5, Assoc::Left, shl),
-            binary_op(5, Assoc::Left, shr),
-            binary_op(8, Assoc::Left, bit_and),
-            binary_op(9, Assoc::Left, bit_xor),
-            binary_op(10, Assoc::Left, bit_or),
-            binary_op(13, Assoc::Right, ternary),
+            // chapter 3 extra credit
+            alt((
+                binary_op(5, Assoc::Left, shl),
+                binary_op(5, Assoc::Left, shr),
+                binary_op(8, Assoc::Left, bit_and),
+                binary_op(9, Assoc::Left, bit_xor),
+                binary_op(10, Assoc::Left, bit_or),
+                binary_op(13, Assoc::Right, ternary),
+            )),
+            // chapter 4
+            binary_op(7, Assoc::Left, eq),
+            binary_op(7, Assoc::Left, ne),
+            binary_op(11, Assoc::Left, and),
+            binary_op(12, Assoc::Left, or),
+            binary_op(6, Assoc::Left, le),
+            binary_op(6, Assoc::Left, lt),
+            binary_op(6, Assoc::Left, ge),
+            binary_op(6, Assoc::Left, gt),
         )),
         // operand
         alt((

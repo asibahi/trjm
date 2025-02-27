@@ -133,6 +133,9 @@ impl Node for Expr {
 pub enum UnaryOp {
     Complement,
     Negate,
+    Not,
+
+    // extra credit
     Plus,
 }
 impl Node for UnaryOp {
@@ -141,6 +144,7 @@ impl Node for UnaryOp {
         match self {
             UnaryOp::Complement => tac::UnOp::Complement,
             UnaryOp::Negate => tac::UnOp::Negate,
+            UnaryOp::Not => todo!(),
 
             UnaryOp::Plus => unreachable!("noop operation"),
         }
@@ -155,6 +159,17 @@ pub enum BinaryOp {
     Divide,
     Reminder,
 
+    
+    And,
+    Or,
+    Equal,
+    NotEqual,
+    LessThan,
+    LessOrEqual,
+    GreaterThan,
+    GreaterOrEqual,
+
+    // extra credit
     BitAnd,
     BitOr,
     BitXor,
@@ -171,6 +186,16 @@ impl Node for BinaryOp {
             BinaryOp::Divide => tac::BinOp::Divide,
             BinaryOp::Reminder => tac::BinOp::Reminder,
 
+            BinaryOp::And => todo!(),
+            BinaryOp::Or => todo!(),
+            BinaryOp::Equal => todo!(),
+            BinaryOp::NotEqual => todo!(),
+            BinaryOp::LessThan => todo!(),
+            BinaryOp::LessOrEqual => todo!(),
+            BinaryOp::GreaterThan => todo!(),
+            BinaryOp::GreaterOrEqual => todo!(),
+
+            // extra credit
             BinaryOp::BitAnd => tac::BinOp::BitAnd,
             BinaryOp::BitOr => tac::BinOp::BitOr,
             BinaryOp::BitXor => tac::BinOp::BitXor,

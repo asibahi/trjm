@@ -14,32 +14,12 @@ pub struct FuncDef {
 #[derive(Debug, Clone)]
 pub enum Instr {
     Return(Value),
-    Unary {
-        op: UnOp,
-        src: Value,
-        dst: Place,
-    },
-    Binary {
-        op: BinOp,
-        lhs: Value,
-        rhs: Value,
-        dst: Place,
-    },
-    Copy {
-        src: Value,
-        dst: Place,
-    },
-    Jump {
-        target: EcoString,
-    },
-    JumpIfZero {
-        cond: Value,
-        target: EcoString,
-    },
-    JumpIfNotZero {
-        cond: Value,
-        target: EcoString,
-    },
+    Unary { op: UnOp, src: Value, dst: Place },
+    Binary { op: BinOp, lhs: Value, rhs: Value, dst: Place },
+    Copy { src: Value, dst: Place },
+    Jump { target: EcoString },
+    JumpIfZero { cond: Value, target: EcoString },
+    JumpIfNotZero { cond: Value, target: EcoString },
     Label(EcoString),
 }
 
@@ -109,10 +89,7 @@ impl ToIr for ast::FuncDef {
             instrs.push(Instr::Return(Value::Const(0)));
         }
 
-        Self::Output {
-            name: self.name.clone(),
-            body: std::mem::take(instrs),
-        }
+        Self::Output { name: self.name.clone(), body: std::mem::take(instrs) }
     }
 }
 impl ToIr for ast::Stmt {
@@ -133,10 +110,9 @@ impl ToIr for ast::Stmt {
 }
 impl ToIr for ast::Expr {
     type Output = Value;
-    #[allow(clippy::cast_sign_loss)]
-    #[allow(clippy::too_many_lines)]
     fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
         match self {
+            #[allow(clippy::cast_sign_loss)]
             Self::ConstInt(i) => Value::Const(*i as u32),
             Self::Unary(ast::UnaryOp::Plus, expr) => expr.to_ir(instrs),
             Self::Unary(
@@ -145,49 +121,7 @@ impl ToIr for ast::Expr {
                 | ast::UnaryOp::IncPre
                 | ast::UnaryOp::DecPre),
                 expr,
-            ) => {
-                static FIX: AtomicUsize = AtomicUsize::new(0);
-
-                let ast::Expr::Var(ref dst) = **expr else {
-                    unreachable!("place expression should be resolved earlier.")
-                };
-
-                let (op, cache) = match op {
-                    ast::UnaryOp::IncPost => (ast::BinaryOp::Add, true),
-                    ast::UnaryOp::DecPost => (ast::BinaryOp::Subtract, true),
-
-                    ast::UnaryOp::IncPre => (ast::BinaryOp::Add, false),
-                    ast::UnaryOp::DecPre => (ast::BinaryOp::Subtract, false),
-                    _ => unreachable!(),
-                };
-
-                let tmp = eco_format!("fix.tmp.{}", FIX.fetch_add(1, Relaxed));
-                let tmp = Place(tmp);
-
-                let var = Place(dst.clone());
-
-                if cache {
-                    instrs.push(Instr::Copy {
-                        src: Value::Var(var.clone()),
-                        dst: tmp.clone(),
-                    });
-                }
-
-                let op = op.to_ir(instrs);
-
-                instrs.push(Instr::Binary {
-                    op,
-                    lhs: Value::Var(var.clone()),
-                    rhs: Value::Const(1),
-                    dst: var.clone(),
-                });
-
-                if cache {
-                    Value::Var(tmp)
-                } else {
-                    Value::Var(var)
-                }
-            }
+            ) => postfix_prefix_instrs(instrs, *op, expr),
             Self::Unary(unary_op, expr) => {
                 static UNARY_TMP: AtomicUsize = AtomicUsize::new(0);
 
@@ -197,100 +131,14 @@ impl ToIr for ast::Expr {
                 let dst = Place(dst_name);
                 let op = unary_op.to_ir(instrs);
 
-                instrs.push(Instr::Unary {
-                    op,
-                    src,
-                    dst: dst.clone(),
-                });
+                instrs.push(Instr::Unary { op, src, dst: dst.clone() });
 
                 Value::Var(dst)
             }
-            Self::Binary {
-                op: ast::BinaryOp::And,
-                lhs,
-                rhs,
-            } => {
-                static AND: AtomicUsize = AtomicUsize::new(0);
-                let counter = AND.fetch_add(1, Relaxed);
-
-                let if_false = eco_format!("and.fls.{}", counter);
-                let end = eco_format!("and.end.{}", counter);
-
-                let dst_name = eco_format!("and.tmp.{}", counter);
-                let dst = Place(dst_name);
-
-                let v1 = lhs.to_ir(instrs);
-                instrs.push(Instr::JumpIfZero {
-                    cond: v1,
-                    target: if_false.clone(),
-                });
-
-                let v2 = rhs.to_ir(instrs);
-                instrs.extend([
-                    Instr::JumpIfZero {
-                        cond: v2,
-                        target: if_false.clone(),
-                    },
-                    Instr::Copy {
-                        src: Value::Const(1),
-                        dst: dst.clone(),
-                    },
-                    Instr::Jump {
-                        target: end.clone(),
-                    },
-                    Instr::Label(if_false),
-                    Instr::Copy {
-                        src: Value::Const(0),
-                        dst: dst.clone(),
-                    },
-                    Instr::Label(end),
-                ]);
-
-                Value::Var(dst)
+            Self::Binary { op: op @ (ast::BinaryOp::And | ast::BinaryOp::Or), lhs, rhs } => {
+                logical_ops_instrs(instrs, *op, lhs, rhs)
             }
-            Self::Binary {
-                op: ast::BinaryOp::Or,
-                lhs,
-                rhs,
-            } => {
-                static OR: AtomicUsize = AtomicUsize::new(0);
-                let counter = OR.fetch_add(1, Relaxed);
 
-                let if_true = eco_format!("or.tru.{}", counter);
-                let end = eco_format!("or.end.{}", counter);
-
-                let dst_name = eco_format!("or.tmp.{}", counter);
-                let dst = Place(dst_name);
-
-                let v1 = lhs.to_ir(instrs);
-                instrs.push(Instr::JumpIfNotZero {
-                    cond: v1,
-                    target: if_true.clone(),
-                });
-
-                let v2 = rhs.to_ir(instrs);
-                instrs.extend([
-                    Instr::JumpIfNotZero {
-                        cond: v2,
-                        target: if_true.clone(),
-                    },
-                    Instr::Copy {
-                        src: Value::Const(0),
-                        dst: dst.clone(),
-                    },
-                    Instr::Jump {
-                        target: end.clone(),
-                    },
-                    Instr::Label(if_true),
-                    Instr::Copy {
-                        src: Value::Const(1),
-                        dst: dst.clone(),
-                    },
-                    Instr::Label(end),
-                ]);
-
-                Value::Var(dst)
-            }
             Self::Binary { op, lhs, rhs } => {
                 static BINARY_TMP: AtomicUsize = AtomicUsize::new(0);
 
@@ -302,12 +150,7 @@ impl ToIr for ast::Expr {
 
                 let op = op.to_ir(instrs);
 
-                instrs.push(Instr::Binary {
-                    op,
-                    lhs,
-                    rhs,
-                    dst: dst.clone(),
-                });
+                instrs.push(Instr::Binary { op, lhs, rhs, dst: dst.clone() });
                 Value::Var(dst)
             }
 
@@ -319,10 +162,7 @@ impl ToIr for ast::Expr {
 
                 let rhs = value.to_ir(instrs);
 
-                instrs.push(Instr::Copy {
-                    src: rhs,
-                    dst: Place(dst.clone()),
-                });
+                instrs.push(Instr::Copy { src: rhs, dst: Place(dst.clone()) });
 
                 Value::Var(Place(dst.clone()))
             }
@@ -330,17 +170,10 @@ impl ToIr for ast::Expr {
                 let ast::Expr::Var(ref dst) = **lhs else {
                     unreachable!("place expression should be resolved earlier.")
                 };
-                let ret = Self::Binary {
-                    op: *op,
-                    lhs: lhs.clone(),
-                    rhs: rhs.clone(),
-                }
-                .to_ir(instrs);
+                let ret =
+                    Self::Binary { op: *op, lhs: lhs.clone(), rhs: rhs.clone() }.to_ir(instrs);
 
-                instrs.push(Instr::Copy {
-                    src: ret,
-                    dst: Place(dst.clone()),
-                });
+                instrs.push(Instr::Copy { src: ret, dst: Place(dst.clone()) });
 
                 Value::Var(Place(dst.clone()))
             }
@@ -348,6 +181,85 @@ impl ToIr for ast::Expr {
         }
     }
 }
+
+fn postfix_prefix_instrs(instrs: &mut Vec<Instr>, op: ast::UnaryOp, expr: &ast::Expr) -> Value {
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    let ast::Expr::Var(ref dst) = *expr else {
+        unreachable!("place expression should be resolved earlier.")
+    };
+
+    let (op, cache) = match op {
+        ast::UnaryOp::IncPost => (ast::BinaryOp::Add, true),
+        ast::UnaryOp::DecPost => (ast::BinaryOp::Subtract, true),
+
+        ast::UnaryOp::IncPre => (ast::BinaryOp::Add, false),
+        ast::UnaryOp::DecPre => (ast::BinaryOp::Subtract, false),
+        _ => unreachable!(),
+    };
+
+    let tmp = eco_format!("fix.tmp.{}", COUNTER.fetch_add(1, Relaxed));
+    let tmp = Place(tmp);
+
+    let var = Place(dst.clone());
+
+    if cache {
+        instrs.push(Instr::Copy { src: Value::Var(var.clone()), dst: tmp.clone() });
+    }
+
+    let op = op.to_ir(instrs);
+
+    instrs.push(Instr::Binary {
+        op,
+        lhs: Value::Var(var.clone()),
+        rhs: Value::Const(1),
+        dst: var.clone(),
+    });
+
+    if cache { Value::Var(tmp) } else { Value::Var(var) }
+}
+
+fn logical_ops_instrs(
+    instrs: &mut Vec<Instr>,
+    op: ast::BinaryOp,
+    lhs: &ast::Expr,
+    rhs: &ast::Expr,
+) -> Value {
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let counter = COUNTER.fetch_add(1, Relaxed);
+
+    let or = matches!(op, ast::BinaryOp::Or);
+
+    let cond_jump = eco_format!("lgc.jmp.{}", counter);
+    let end = eco_format!("lgc.end.{}", counter);
+
+    let dst_name = eco_format!("lgc.tmp.{}", counter);
+    let dst = Place(dst_name);
+
+    let v1 = lhs.to_ir(instrs);
+    instrs.push(if or {
+        Instr::JumpIfNotZero { cond: v1, target: cond_jump.clone() }
+    } else {
+        Instr::JumpIfZero { cond: v1, target: cond_jump.clone() }
+    });
+
+    let v2 = rhs.to_ir(instrs);
+    instrs.extend([
+        if or {
+            Instr::JumpIfNotZero { cond: v2, target: cond_jump.clone() }
+        } else {
+            Instr::JumpIfZero { cond: v2, target: cond_jump.clone() }
+        },
+        Instr::Copy { src: Value::Const(u32::from(!or)), dst: dst.clone() },
+        Instr::Jump { target: end.clone() },
+        Instr::Label(cond_jump),
+        Instr::Copy { src: Value::Const(u32::from(or)), dst: dst.clone() },
+        Instr::Label(end),
+    ]);
+
+    Value::Var(dst)
+}
+
 impl ToIr for ast::UnaryOp {
     type Output = UnOp;
     fn to_ir(&self, _: &mut Vec<Instr>) -> Self::Output {
@@ -410,10 +322,7 @@ impl ToIr for ast::Decl {
     fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
         if let Some(e) = &self.init {
             let v = e.to_ir(instrs);
-            instrs.push(Instr::Copy {
-                src: v,
-                dst: Place(self.name.clone()),
-            });
+            instrs.push(Instr::Copy { src: v, dst: Place(self.name.clone()) });
         }
     }
 }

@@ -73,23 +73,13 @@ fn validate_path(s: &str) -> Result<PathBuf, &'static str> {
     }
 
     let path = PathBuf::from(s);
-    if path.is_file() && path.exists() {
-        Ok(path.clone())
-    } else {
-        Err("not a file.")
-    }
+    if path.is_file() && path.exists() { Ok(path.clone()) } else { Err("not a file.") }
 }
 
 fn preprocess(input: &PathBuf) -> Result<PathBuf, ExitCode> {
     let output = input.with_extension("i");
 
-    let status = Command::new("gcc")
-        .arg("-E")
-        .arg("-P")
-        .arg(input)
-        .arg("-o")
-        .arg(&output)
-        .status();
+    let status = Command::new("gcc").arg("-E").arg("-P").arg(input).arg("-o").arg(&output).status();
 
     if status.is_err() || status.is_ok_and(|s| !s.success()) {
         eprintln!("preprocessor failed");
@@ -102,11 +92,7 @@ fn preprocess(input: &PathBuf) -> Result<PathBuf, ExitCode> {
 fn assemble(input: &PathBuf) -> Result<PathBuf, ExitCode> {
     let output = input.with_extension("");
 
-    let status = Command::new("gcc")
-        .arg(input)
-        .arg("-o")
-        .arg(&output)
-        .status();
+    let status = Command::new("gcc").arg(input).arg("-o").arg(&output).status();
 
     if status.is_err() || status.is_ok_and(|s| !s.success()) {
         eprintln!("assembler failed");

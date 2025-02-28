@@ -24,8 +24,7 @@ where
     }
 
     fn replace_pseudos(&mut self, map: &mut FxHashMap<EcoString, u32>, stack_depth: &mut u32) {
-        self.iter_mut()
-            .for_each(|e| e.replace_pseudos(map, stack_depth));
+        self.iter_mut().for_each(|e| e.replace_pseudos(map, stack_depth));
     }
 
     fn adjust_instrs(&mut self, stack_depth: u32) {
@@ -38,8 +37,7 @@ where
     U: Assembly,
 {
     fn emit_code(&self, f: &mut impl Write) {
-        self.as_ref()
-            .either_with(f, |f, t| t.emit_code(f), |f, u| u.emit_code(f));
+        self.as_ref().either_with(f, |f, t| t.emit_code(f), |f, u| u.emit_code(f));
     }
 
     fn replace_pseudos(&mut self, map: &mut FxHashMap<EcoString, u32>, stack_depth: &mut u32) {
@@ -51,10 +49,7 @@ where
     }
 
     fn adjust_instrs(&mut self, stack_depth: u32) {
-        self.as_mut().either(
-            |t| t.adjust_instrs(stack_depth),
-            |u| u.adjust_instrs(stack_depth),
-        );
+        self.as_mut().either(|t| t.adjust_instrs(stack_depth), |u| u.adjust_instrs(stack_depth));
     }
 }
 
@@ -458,15 +453,10 @@ impl ToAsm for ir::Instr {
     type Output = Vec<Instr>;
     fn to_asm(&self) -> Self::Output {
         match self {
-            Self::Return(value) => vec![
-                Instr::Mov(value.to_asm(), Operand::Reg(Register::AX)),
-                Instr::Ret,
-            ],
-            Self::Unary {
-                op: ir::UnOp::Not,
-                src,
-                dst,
-            } => {
+            Self::Return(value) => {
+                vec![Instr::Mov(value.to_asm(), Operand::Reg(Register::AX)), Instr::Ret]
+            }
+            Self::Unary { op: ir::UnOp::Not, src, dst } => {
                 let dst = dst.to_asm();
                 vec![
                     Instr::Cmp(Operand::Imm(0), src.to_asm()),
@@ -476,10 +466,7 @@ impl ToAsm for ir::Instr {
             }
             Self::Unary { op, src, dst } => {
                 let dst = dst.to_asm();
-                vec![
-                    Instr::Mov(src.to_asm(), dst.clone()),
-                    Instr::Unary(op.to_asm(), dst),
-                ]
+                vec![Instr::Mov(src.to_asm(), dst.clone()), Instr::Unary(op.to_asm(), dst)]
             }
             Self::Binary { op, lhs, rhs, dst } => match op {
                 ir::BinOp::Add
@@ -525,14 +512,12 @@ impl ToAsm for ir::Instr {
             },
             Self::Copy { src, dst } => vec![Instr::Mov(src.to_asm(), dst.to_asm())],
             Self::Jump { target } => vec![Instr::Jmp(target.clone())],
-            Self::JumpIfZero { cond, target } => vec![
-                Instr::Cmp(Operand::Imm(0), cond.to_asm()),
-                Instr::JmpCC(E, target.clone()),
-            ],
-            Self::JumpIfNotZero { cond, target } => vec![
-                Instr::Cmp(Operand::Imm(0), cond.to_asm()),
-                Instr::JmpCC(NE, target.clone()),
-            ],
+            Self::JumpIfZero { cond, target } => {
+                vec![Instr::Cmp(Operand::Imm(0), cond.to_asm()), Instr::JmpCC(E, target.clone())]
+            }
+            Self::JumpIfNotZero { cond, target } => {
+                vec![Instr::Cmp(Operand::Imm(0), cond.to_asm()), Instr::JmpCC(NE, target.clone())]
+            }
             Self::Label(name) => vec![Instr::Label(name.clone())],
         }
     }

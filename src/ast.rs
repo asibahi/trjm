@@ -30,10 +30,7 @@ impl FuncDef {
             acc.push(bi);
         }
 
-        Some(Self {
-            name: self.name,
-            body: acc,
-        })
+        Some(Self { name: self.name, body: acc })
     }
 }
 
@@ -96,10 +93,9 @@ impl Expr {
 
             Self::Var(var) => variable_map.get(&var).cloned().map(Self::Var),
 
-            Self::Unary(op, expr) => Some(Self::Unary(
-                op,
-                Box::new(expr.resolve_variables(variable_map)?),
-            )),
+            Self::Unary(op, expr) => {
+                Some(Self::Unary(op, Box::new(expr.resolve_variables(variable_map)?)))
+            }
 
             Self::Binary { op, lhs, rhs } => Some(Self::Binary {
                 op,
@@ -141,10 +137,7 @@ impl Decl {
             None
         };
 
-        Some(Decl {
-            name: unique_name,
-            init,
-        })
+        Some(Decl { name: unique_name, init })
     }
 }
 

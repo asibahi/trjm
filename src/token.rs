@@ -18,13 +18,13 @@ pub(crate) enum Token {
     // Operators
     Plus,      // +
     PlusEqual, // +=
-    DblPlus, // ++
+    DblPlus,   // ++
 
     Astrisk,
     AstriskEqual,
 
-    ForwardSlash,
-    ForwardSlashEqual,
+    ForeSlash,
+    ForeSlashEqual,
 
     Percent,
     PercentEqual,
@@ -61,7 +61,7 @@ pub(crate) enum Token {
     RightShift,      // >>
     RightShiftEqual, // >>=
 
-    QuestionMark,
+    QMark,
     Colon,
 
     // Punctuation
@@ -74,19 +74,11 @@ pub(crate) enum Token {
 
 impl Token {
     pub fn unwrap_ident(&self) -> Option<EcoString> {
-        if let Token::Ident(s) = self {
-            Some(s.clone())
-        } else {
-            None
-        }
+        if let Token::Ident(s) = self { Some(s.clone()) } else { None }
     }
 
     pub fn unwrap_number(&self) -> Option<i32> {
-        if let Token::NumberLiteral(v) = self {
-            Some(*v)
-        } else {
-            None
-        }
+        if let Token::NumberLiteral(v) = self { Some(*v) } else { None }
     }
 }
 
@@ -132,10 +124,6 @@ impl<'s> Input for Tokens<'s> {
     }
 
     fn slice_index(&self, count: usize) -> Result<usize, nom::Needed> {
-        if self.0.len() >= count {
-            Ok(count)
-        } else {
-            Err(nom::Needed::new(count - self.0.len()))
-        }
+        if self.0.len() >= count { Ok(count) } else { Err(nom::Needed::new(count - self.0.len())) }
     }
 }

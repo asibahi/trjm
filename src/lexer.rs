@@ -68,10 +68,7 @@ pub fn lex(i: &str) -> Result<Vec<Token>, LexError<'_>> {
         number,
     ));
 
-    all_consuming(many(1.., tokens))
-        .process::<Emit>(i.trim())
-        .finish()
-        .map(|t| t.1)
+    all_consuming(many(1.., tokens)).process::<Emit>(i.trim()).finish().map(|t| t.1)
 }
 
 macro_rules! token {
@@ -100,8 +97,8 @@ token!(plus, Plus, "+");
 token!(asterisk, Astrisk, "*");
 token!(asterisk_equal, AstriskEqual, "*=");
 
-token!(forward_slash, ForwardSlash, "/");
-token!(forward_slash_equal, ForwardSlashEqual, "/=");
+token!(forward_slash, ForeSlash, "/");
+token!(forward_slash_equal, ForeSlashEqual, "/=");
 
 token!(percent, Percent, "%");
 token!(percent_equal, PercentEqual, "%=");
@@ -125,7 +122,7 @@ token!(pipe_equal, PipeEqual, "|=");
 token!(caret, Caret, "^");
 token!(caret_equal, CaretEqual, "^=");
 
-token!(question_mark, QuestionMark, "?");
+token!(question_mark, QMark, "?");
 token!(colon, Colon, ":");
 
 // should later be into a famly

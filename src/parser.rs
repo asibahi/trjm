@@ -2,13 +2,13 @@ use crate::{
     ast::*,
     token::{Token, Tokens},
 };
-use either::Either::{Left, Right};
 use nom::{
     Finish, IResult, Parser,
     branch::alt,
     bytes::take,
-    combinator::{all_consuming, fail, verify},
-    sequence::delimited,
+    combinator::{all_consuming, fail, opt, verify},
+    multi::many,
+    sequence::{delimited, preceded, terminated},
 };
 use nom_language::precedence::{Assoc, Operation, binary_op, precedence, unary_op};
 
@@ -47,9 +47,7 @@ fn parse_func(i: Tokens<'_>) -> IResult<Tokens<'_>, FuncDef, ParseError<'_>> {
     let (i, _) = tag_token!(Token::ParenClose).process::<Check>(i)?;
 
     let (i, _) = tag_token!(Token::BraceOpen).process::<Check>(i)?;
-
-    let (i, body) = parse_stmt(i)?;
-
+    let (i, body) = many(.., parse_block_item).process::<Emit>(i)?;
     let (i, _) = tag_token!(Token::BraceClose).process::<Check>(i)?;
 
     let func_def = FuncDef { name, body };
@@ -57,20 +55,45 @@ fn parse_func(i: Tokens<'_>) -> IResult<Tokens<'_>, FuncDef, ParseError<'_>> {
     Ok((i, func_def))
 }
 
+fn parse_block_item(i: Tokens<'_>) -> IResult<Tokens<'_>, BlockItem, ParseError<'_>> {
+    alt((parse_decl.map(BlockItem::D), parse_stmt.map(BlockItem::S))).process::<Emit>(i)
+}
+
+fn parse_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, Decl, ParseError<'_>> {
+    let (i, _) = tag_token!(Token::Int).process::<Check>(i)?;
+    let (i, name) = tag_token!(Token::Ident(_))
+        .map_opt(|t: Tokens<'_>| t.0[0].unwrap_ident())
+        .process::<Emit>(i)?;
+    let (i, init) = opt(preceded(tag_token!(Token::Equal), parse_expr)).process::<Emit>(i)?;
+    let (i, _) = tag_token!(Token::Semicolon).process::<Check>(i)?;
+    let ret = Decl { name, init };
+
+    Ok((i, ret))
+}
+
 fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
-    // parses return statement
-    delimited(
+    let ret = delimited(
         tag_token!(Token::Return),
         parse_expr,
         tag_token!(Token::Semicolon),
     )
-    .map(|e| Stmt::Return(Box::new(e)))
-    .process::<Emit>(i)
+    .map(Stmt::Return);
+    let expr = terminated(parse_expr, tag_token!(Token::Semicolon)).map(Stmt::Expression);
+    let null = tag_token!(Token::Semicolon).map(|_| Stmt::Null);
+
+    alt((ret, expr, null)).process::<Emit>(i)
 }
+
+enum BinKind {
+    Typical(BinaryOp),
+    Ternary(Expr),
+    Assignment,
+}
+use BinKind::*;
 
 macro_rules! binop {
     ($token:pat, $binop:expr) => {
-        tag_token!($token).map(|_| $binop).map(Left)
+        tag_token!($token).map(|_| $binop).map(Typical)
     };
 }
 
@@ -110,14 +133,17 @@ fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
     let gt = binop!(Token::GreaterThan, BinaryOp::GreaterThan);
     let ge = binop!(Token::GreaterEqual, BinaryOp::GreaterOrEqual);
 
+    //chapter 5
+    let assign = tag_token!(Token::Equal).map(|_| Assignment);
+
     let ternary = delimited(
         tag_token!(Token::QuestionMark),
         parse_expr,
         tag_token!(Token::Colon),
     )
-    .map(Right);
+    .map(Ternary);
 
-    // Operand expressions
+    // Operand expressions _ or factors
     let const_expr = tag_token!(Token::NumberLiteral(_))
         .map_opt(|t: Tokens<'_>| t.0[0].unwrap_number().map(Expr::ConstInt));
     let grp_expr = delimited(
@@ -125,6 +151,9 @@ fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
         parse_expr,
         tag_token!(Token::ParenClose),
     );
+    let ident = tag_token!(Token::Ident(_))
+        .map_opt(|t: Tokens<'_>| t.0[0].unwrap_ident())
+        .map(Expr::Var);
 
     // where does the ternary fit in?
 
@@ -163,21 +192,27 @@ fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
             binary_op(6, Assoc::Left, lt),
             binary_op(6, Assoc::Left, ge),
             binary_op(6, Assoc::Left, gt),
+            // chapter 5
+            binary_op(14, Assoc::Right, assign),
         )),
         // operand
         alt((
             const_expr, // const
             grp_expr,   // grp
+            ident,      // variable
         )),
         // fold
         |op: Operation<_, UnaryOp, _, _>| match op {
             Operation::Prefix(op, o) => Ok(Expr::Unary(op, Box::new(o))),
-            Operation::Binary(lhs, Left(op), rhs) => Ok(Expr::Binary {
+            Operation::Binary(lhs, Typical(op), rhs) => Ok(Expr::Binary {
                 op,
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
             }),
-            Operation::Binary(lhs, Right(op), rhs) => Ok(Expr::Conditional {
+            Operation::Binary(lhs, Assignment, rhs) => {
+                Ok(Expr::Assignemnt(Box::new(lhs), Box::new(rhs)))
+            }
+            Operation::Binary(lhs, Ternary(op), rhs) => Ok(Expr::Conditional {
                 cond: Box::new(lhs),
                 then: Box::new(op),
                 else_: Box::new(rhs),

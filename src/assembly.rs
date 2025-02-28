@@ -10,7 +10,11 @@ pub trait Assembly: Clone {
     fn replace_pseudos(&mut self, map: &mut FxHashMap<EcoString, u32>, stack_depth: &mut u32);
     fn adjust_instrs(&mut self, stack_depth: u32);
 }
-
+impl Assembly for () {
+    fn emit_code(&self, _: &mut impl Write) {}
+    fn replace_pseudos(&mut self, _: &mut FxHashMap<EcoString, u32>, _: &mut u32) {}
+    fn adjust_instrs(&mut self, _: u32) {}
+}
 impl<T> Assembly for Vec<T>
 where
     T: Assembly,
@@ -270,7 +274,6 @@ pub enum Operand {
     Pseudo(EcoString),
     Stack(u32),
 }
-#[allow(clippy::enum_glob_use)]
 use Operand::*;
 impl Assembly for Operand {
     fn emit_code(&self, f: &mut impl Write) {
@@ -344,7 +347,6 @@ pub enum Register {
     R11, R11B,
     CX, CL,
 }
-#[allow(clippy::enum_glob_use)]
 use Register::*;
 impl Register {
     #[expect(unused)]
@@ -396,7 +398,6 @@ pub enum CondCode {
     G,
     GE,
 }
-#[allow(clippy::enum_glob_use)]
 use CondCode::*;
 impl Assembly for CondCode {
     fn emit_code(&self, f: &mut impl Write) {
@@ -419,6 +420,10 @@ impl Assembly for CondCode {
 pub trait ToAsm: std::fmt::Debug + Clone {
     type Output: Assembly;
     fn to_asm(&self) -> Self::Output;
+}
+impl ToAsm for () {
+    type Output = ();
+    fn to_asm(&self) -> Self::Output {}
 }
 impl<T> ToAsm for Vec<T>
 where

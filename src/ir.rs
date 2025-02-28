@@ -88,6 +88,17 @@ pub trait ToIr {
     type Output: assembly::ToAsm;
     fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output;
 }
+impl ToIr for () {
+    type Output = ();
+    fn to_ir(&self, _: &mut Vec<Instr>) -> Self::Output {}
+}
+impl<T> ToIr for Vec<T> where T : ToIr {
+    type Output = Vec<Instr>;
+
+    fn to_ir(&self, _: &mut Vec<Instr>) -> Self::Output {
+        todo!()
+    }
+}
 impl ToIr for ast::Program {
     type Output = Program;
     fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
@@ -116,6 +127,8 @@ impl ToIr for ast::Stmt {
 
                 ret
             }
+            Self::Expression(_) => todo!(),
+            Self::Null => todo!(),
             Self::If { .. } => unimplemented!(),
         }
     }
@@ -250,7 +263,8 @@ impl ToIr for ast::Expr {
                 });
                 Value::Var(dst)
             }
-            Self::Conditional { .. } => todo!(),
+
+            Self::Var(_) | Self::Assignemnt(..) | Self::Conditional { .. } => todo!(),
         }
     }
 }
@@ -292,5 +306,12 @@ impl ToIr for ast::BinaryOp {
             Self::LeftShift => BinOp::LeftShift,
             Self::RightShift => BinOp::RightShift,
         }
+    }
+}
+impl ToIr for ast::BlockItem {
+    type Output = ();
+
+    fn to_ir(&self, _: &mut Vec<Instr>) -> Self::Output {
+        todo!()
     }
 }

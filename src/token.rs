@@ -33,14 +33,14 @@ pub(crate) enum Token {
     DblPipe,
     Caret,
 
-    LessThan, // <
-    GreaterThan, // >
-    LessEqual, // <=
+    LessThan,     // <
+    GreaterThan,  // >
+    LessEqual,    // <=
     GreaterEqual, // >=
 
     Increment,
     Decrement,
-    LeftShift, // <<
+    LeftShift,  // <<
     RightShift, // >>
 
     QuestionMark,

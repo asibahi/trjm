@@ -116,7 +116,7 @@ impl Assembly for FuncDef {
             self.instrs.insert(0, Instr::AllocateStack(stack_depth));
         }
 
-        '_fixup_instrs: {
+        '_fixup_instrs: for _ in 0..2 {
             let mut out = Vec::with_capacity(self.instrs.len());
 
             for instr in std::mem::take(&mut self.instrs) {
@@ -153,7 +153,9 @@ impl Assembly for FuncDef {
                         Instr::Binary(Operator::Mul, src, Reg(R11)),
                         Instr::Mov(Reg(R11), dst),
                     ]),
-                    Instr::Binary(opp @ (Operator::Shl | Operator::Shr), src, dst @ Stack(_)) => {
+                    Instr::Binary(opp @ (Operator::Shl | Operator::Shr), src, dst @ Stack(_))
+                        if src != Reg(CX.as_1_byte()) =>
+                    {
                         out.extend([
                             Instr::Mov(src, Reg(CX)),
                             Instr::Binary(opp, Reg(CX.as_1_byte()), dst),
@@ -267,7 +269,7 @@ impl Assembly for Instr {
     fn adjust_instrs(&mut self, _: u32) {}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Operand {
     Imm(u32),
     Reg(Register),
@@ -303,7 +305,7 @@ impl Assembly for Operand {
     fn adjust_instrs(&mut self, _: u32) {}
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operator {
     // unary
     Not,
@@ -338,7 +340,7 @@ impl Assembly for Operator {
     fn adjust_instrs(&mut self, _: u32) {}
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[rustfmt::skip]
 pub enum Register {
     AX, AL,
@@ -479,12 +481,7 @@ impl ToAsm for ir::Instr {
                     Instr::Unary(op.to_asm(), dst),
                 ]
             }
-            Self::Binary {
-                op,
-                src1,
-                src2,
-                dst,
-            } => match op {
+            Self::Binary { op, lhs, rhs, dst } => match op {
                 ir::BinOp::Add
                 | ir::BinOp::Subtract
                 | ir::BinOp::Multiply
@@ -495,8 +492,8 @@ impl ToAsm for ir::Instr {
                 | ir::BinOp::RightShift => {
                     let dst = dst.to_asm();
                     vec![
-                        Instr::Mov(src1.to_asm(), dst.clone()),
-                        Instr::Binary(op.to_asm().unwrap_left(), src2.to_asm(), dst),
+                        Instr::Mov(lhs.to_asm(), dst.clone()),
+                        Instr::Binary(op.to_asm().unwrap_left(), rhs.to_asm(), dst),
                     ]
                 }
                 ir::BinOp::Divide | ir::BinOp::Reminder => {
@@ -506,9 +503,9 @@ impl ToAsm for ir::Instr {
                         _ => unreachable!(),
                     };
                     vec![
-                        Instr::Mov(src1.to_asm(), Operand::Reg(Register::AX)),
+                        Instr::Mov(lhs.to_asm(), Operand::Reg(Register::AX)),
                         Instr::Cdq,
-                        Instr::Idiv(src2.to_asm()),
+                        Instr::Idiv(rhs.to_asm()),
                         Instr::Mov(Operand::Reg(res), dst.to_asm()),
                     ]
                 }
@@ -520,8 +517,8 @@ impl ToAsm for ir::Instr {
                 | ir::BinOp::GreaterOrEqual => {
                     let dst = dst.to_asm();
                     vec![
-                        Instr::Cmp(src2.to_asm(), src1.to_asm()),
-                        Instr::Mov(Operand::Imm(0), dst.clone()), // zero stuff : replacing with XOR breaks code
+                        Instr::Cmp(rhs.to_asm(), lhs.to_asm()),
+                        Instr::Mov(Operand::Imm(0), dst.clone()),
                         Instr::SetCC(op.to_asm().unwrap_right(), dst),
                     ]
                 }

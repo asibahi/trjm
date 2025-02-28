@@ -16,32 +16,50 @@ pub(crate) enum Token {
     Return,
 
     // Operators
-    Plus,
+    Plus,      // +
+    PlusEqual, // +=
+    DblPlus, // ++
+
     Astrisk,
+    AstriskEqual,
+
     ForwardSlash,
+    ForwardSlashEqual,
+
     Percent,
+    PercentEqual,
+
     Tilde,
-    Hyphen,
+
+    Hyphen,      // -
+    HyphenEqual, // -=
+    DblHyphen,   // --
 
     DblEqual,
     Equal,
     Bang,
     BangEqual,
+
     Ambersand,
     DblAmbersand,
+    AmbersandEqual,
+
     Pipe,
     DblPipe,
+    PipeEqual,
+
     Caret,
+    CaretEqual,
 
     LessThan,     // <
     GreaterThan,  // >
     LessEqual,    // <=
     GreaterEqual, // >=
 
-    Increment,
-    Decrement,
-    LeftShift,  // <<
-    RightShift, // >>
+    LeftShift,       // <<
+    LeftShiftEqual,  // <<=
+    RightShift,      // >>
+    RightShiftEqual, // >>=
 
     QuestionMark,
     Colon,

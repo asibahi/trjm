@@ -10,9 +10,7 @@ impl Program {
         let mut buf = vec![];
         self.to_ir(&mut buf)
     }
-    pub fn resolve_variables(
-        self,
-    ) -> Option<Self> {
+    pub fn resolve_variables(self) -> Option<Self> {
         let mut variable_map = FxHashMap::default();
         Some(Self(self.0.resolve_variables(&mut variable_map)?))
     }
@@ -72,6 +70,11 @@ pub enum Expr {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    CompoundAssignment {
+        op: BinaryOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
     Assignemnt(Box<Expr>, Box<Expr>),
     #[allow(unused)]
     Conditional {
@@ -99,6 +102,12 @@ impl Expr {
             )),
 
             Self::Binary { op, lhs, rhs } => Some(Self::Binary {
+                op,
+                lhs: Box::new(lhs.resolve_variables(variable_map)?),
+                rhs: Box::new(rhs.resolve_variables(variable_map)?),
+            }),
+
+            Self::CompoundAssignment { op, lhs, rhs } => Some(Self::CompoundAssignment {
                 op,
                 lhs: Box::new(lhs.resolve_variables(variable_map)?),
                 rhs: Box::new(rhs.resolve_variables(variable_map)?),
@@ -159,8 +168,14 @@ pub enum UnaryOp {
     Negate,
     Not,
 
-    // extra credit
+    // pedantic
     Plus,
+
+    // chapter 5 extra credit
+    IncPre,
+    IncPost,
+    DecPre,
+    DecPost,
 }
 
 #[derive(Debug, Clone, Copy)]

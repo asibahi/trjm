@@ -36,9 +36,12 @@ pub fn compile(input: &PathBuf, mode: Mode) -> Result<PathBuf, u8> {
         return Err(0);
     }
 
-    let Ok(prgm) = parser::parse(&tokens) else {
-        eprintln!("Failed to parse.");
-        return Err(4);
+    let prgm = match parser::parse(&tokens) {
+        Ok(prgm) => prgm,
+        Err(e) => {
+            eprintln!("Failed to parse. {e:#?}");
+            return Err(4);
+        }
     };
 
     if matches!(mode, Mode::Parse) {

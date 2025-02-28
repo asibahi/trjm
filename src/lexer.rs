@@ -18,18 +18,46 @@ type Check = nom::OutputM<nom::Check, nom::Emit, nom::Complete>;
 
 pub fn lex(i: &str) -> Result<Vec<Token>, LexError<'_>> {
     let tokens = alt((
-        alt((decrement, hyphen)),
-        alt((incrmeent, plus)),
+        alt((decrement, hyphen_equal, hyphen)),
+        alt((incrmeent, plus_equal, plus)),
         //
-        alt((asterisk, forward_slash, percent, tilde)),
+        alt((
+            asterisk_equal,
+            asterisk,
+            forward_slash_equal,
+            forward_slash,
+            percent_equal,
+            percent,
+            tilde,
+        )),
         //
         alt((dbl_equal, equal)),
         alt((bang_equal, bang)),
         //
-        alt((dbl_ambersand, dbl_pipe, ambersand, pipe, caret)),
+        alt((
+            dbl_ambersand,
+            ambersand_equal,
+            dbl_pipe,
+            pipe_equal,
+            ambersand,
+            pipe,
+            caret_equal,
+            caret,
+        )),
         //
-        alt((left_shift, less_equal, less_than)),
-        alt((right_shift, greater_equal, greater_than)),
+        alt((
+            left_shift_equal,
+            right_shift_equal,
+            //
+            left_shift,
+            right_shift,
+            //
+            less_equal,
+            greater_equal,
+            //
+            less_than,
+            greater_than,
+        )),
         //
         question_mark,
         colon,
@@ -61,15 +89,23 @@ macro_rules! token {
 }
 
 // order of these is important
-token!(decrement, Decrement, "--");
+token!(decrement, DblHyphen, "--");
+token!(hyphen_equal, HyphenEqual, "-=");
 token!(hyphen, Hyphen, "-");
 
-token!(incrmeent, Increment, "++");
+token!(incrmeent, DblPlus, "++");
+token!(plus_equal, PlusEqual, "+=");
 token!(plus, Plus, "+");
 
 token!(asterisk, Astrisk, "*");
+token!(asterisk_equal, AstriskEqual, "*=");
+
 token!(forward_slash, ForwardSlash, "/");
+token!(forward_slash_equal, ForwardSlashEqual, "/=");
+
 token!(percent, Percent, "%");
+token!(percent_equal, PercentEqual, "%=");
+
 token!(tilde, Tilde, "~");
 
 token!(dbl_equal, DblEqual, "==");
@@ -78,20 +114,27 @@ token!(equal, Equal, "=");
 token!(bang_equal, BangEqual, "!=");
 token!(bang, Bang, "!");
 
-token!(dbl_ambersand, DblAmbersand, "&&");
-token!(dbl_pipe, DblPipe, "||");
 token!(ambersand, Ambersand, "&");
+token!(dbl_ambersand, DblAmbersand, "&&");
+token!(ambersand_equal, AmbersandEqual, "&=");
+
 token!(pipe, Pipe, "|");
+token!(dbl_pipe, DblPipe, "||");
+token!(pipe_equal, PipeEqual, "|=");
+
 token!(caret, Caret, "^");
+token!(caret_equal, CaretEqual, "^=");
 
 token!(question_mark, QuestionMark, "?");
 token!(colon, Colon, ":");
 
 // should later be into a famly
+token!(left_shift_equal, LeftShiftEqual, "<<=");
 token!(left_shift, LeftShift, "<<");
 token!(less_equal, LessEqual, "<=");
 token!(less_than, LessThan, "<");
 
+token!(right_shift_equal, RightShiftEqual, ">>=");
 token!(right_shift, RightShift, ">>");
 token!(greater_equal, GreaterEqual, ">=");
 token!(greater_than, GreaterThan, ">");

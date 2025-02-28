@@ -93,8 +93,7 @@ impl Tac for Instr {
                 let dst = dst.to_asm();
                 vec![
                     AsmInst::Cmp(Operand::Imm(0), src.to_asm()),
-                    AsmInst::Binary(Operator::Xor, dst.clone(), dst.clone()),
-                    // AsmInst::Mov(Operand::Imm(0), dst.clone()), // zero stuff : replace with XOR ?
+                    AsmInst::Mov(Operand::Imm(0), dst.clone()), // zero stuff : replacing with XOR breaks code
                     AsmInst::SetCC(E, dst),
                 ]
             }
@@ -147,8 +146,7 @@ impl Tac for Instr {
                     let dst = dst.to_asm();
                     vec![
                         AsmInst::Cmp(src2.to_asm(), src1.to_asm()),
-                        AsmInst::Binary(Operator::Xor, dst.clone(), dst.clone()),
-                        // AsmInst::Mov(Operand::Imm(0), dst.clone()), // zero stuff : replace with XOR ?
+                        AsmInst::Mov(Operand::Imm(0), dst.clone()), // zero stuff : replacing with XOR breaks code
                         AsmInst::SetCC(op.to_asm().unwrap_right(), dst),
                     ]
                 }

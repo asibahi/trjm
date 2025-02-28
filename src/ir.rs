@@ -92,13 +92,6 @@ impl ToIr for () {
     type Output = ();
     fn to_ir(&self, _: &mut Vec<Instr>) -> Self::Output {}
 }
-impl<T> ToIr for Vec<T> where T : ToIr {
-    type Output = Vec<Instr>;
-
-    fn to_ir(&self, _: &mut Vec<Instr>) -> Self::Output {
-        todo!()
-    }
-}
 impl ToIr for ast::Program {
     type Output = Program;
     fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
@@ -108,27 +101,32 @@ impl ToIr for ast::Program {
 impl ToIr for ast::FuncDef {
     type Output = FuncDef;
     fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
+        for bi in &self.body {
+            bi.to_ir(instrs);
+        }
+
+        if !matches!(instrs.last(), Some(Instr::Return(_))) {
+            instrs.push(Instr::Return(Value::Const(0)));
+        }
+
         Self::Output {
             name: self.name.clone(),
-            body: self.body.to_ir(instrs),
+            body: std::mem::take(instrs),
         }
     }
 }
 impl ToIr for ast::Stmt {
-    type Output = Vec<Instr>;
+    type Output = ();
     fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
         match self {
             Self::Return(expr) => {
                 let dst = expr.to_ir(instrs);
-
-                // is this right?
-                let mut ret = std::mem::take(instrs);
-                ret.push(Instr::Return(dst));
-
-                ret
+                instrs.push(Instr::Return(dst));
             }
-            Self::Expression(_) => todo!(),
-            Self::Null => todo!(),
+            Self::Expression(expr) => {
+                expr.to_ir(instrs);
+            }
+            Self::Null => {}
             Self::If { .. } => unimplemented!(),
         }
     }
@@ -264,7 +262,22 @@ impl ToIr for ast::Expr {
                 Value::Var(dst)
             }
 
-            Self::Var(_) | Self::Assignemnt(..) | Self::Conditional { .. } => todo!(),
+            Self::Var(id) => Value::Var(Place(id.clone())),
+            Self::Assignemnt(place, value) => {
+                let ast::Expr::Var(ref dst) = **place else {
+                    unreachable!("place expression should be resolved earlier.")
+                };
+
+                let rhs = value.to_ir(instrs);
+
+                instrs.push(Instr::Copy {
+                    src: rhs,
+                    dst: Place(dst.clone()),
+                });
+
+                Value::Var(Place(dst.clone()))
+            }
+            Self::Conditional { .. } => unimplemented!(),
         }
     }
 }
@@ -311,7 +324,24 @@ impl ToIr for ast::BinaryOp {
 impl ToIr for ast::BlockItem {
     type Output = ();
 
-    fn to_ir(&self, _: &mut Vec<Instr>) -> Self::Output {
-        todo!()
+    fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
+        match self {
+            ast::BlockItem::S(stmt) => {
+                stmt.to_ir(instrs);
+            }
+            ast::BlockItem::D(decl) => {
+                decl.to_ir(instrs);
+            }
+        }
+    }
+}
+impl ToIr for ast::Decl {
+    type Output = ();
+
+    fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
+        if let Some(e) = &self.init {
+            let v = e.to_ir(instrs);
+            instrs.push(Instr::Copy { src: v, dst: Place(self.name.clone()) });
+        }
     }
 }

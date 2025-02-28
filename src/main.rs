@@ -47,12 +47,14 @@ fn parse() -> Result<(trjm::Mode, PathBuf), ExitCode> {
         args.contains("--tacky"),
         args.contains("--codegen"),
         args.contains("--S"),
+        args.contains("--validate"),
     ) {
         (true, ..) => trjm::Mode::Lex,
         (_, true, ..) => trjm::Mode::Parse,
         (_, _, true, ..) => trjm::Mode::Tac,
-        (.., true, _) => trjm::Mode::Codegen,
-        (.., true) => trjm::Mode::Assembly,
+        (.., true, _, _) => trjm::Mode::Codegen,
+        (.., true, _) => trjm::Mode::Assembly,
+        (.., true) => trjm::Mode::Validate,
         _ => trjm::Mode::Compile,
     };
 

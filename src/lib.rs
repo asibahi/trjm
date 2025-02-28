@@ -15,6 +15,7 @@ pub enum Mode {
     Parse,
     Tac,
     Codegen,
+    Validate,
     Assembly,
     Compile,
 }
@@ -41,6 +42,16 @@ pub fn compile(input: &PathBuf, mode: Mode) -> Result<PathBuf, u8> {
     };
 
     if matches!(mode, Mode::Parse) {
+        eprintln!("{prgm:#?}");
+        return Err(0);
+    }
+
+    let Some(prgm) = prgm.resolve_variables() else {
+        eprintln!("failed semantic analysis.");
+        return Err(5);
+    };
+
+    if matches!(mode, Mode::Validate) {
         eprintln!("{prgm:#?}");
         return Err(0);
     }

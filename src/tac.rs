@@ -55,6 +55,22 @@ pub enum Instr {
         src2: Value,
         dst: Place,
     },
+    Copy {
+        src: Value,
+        dst: Place,
+    },
+    Jump {
+        target: EcoString,
+    },
+    JumpIfZero {
+        cond: Value,
+        target: EcoString,
+    },
+    JumpIfNotZero {
+        cond: Value,
+        target: EcoString,
+    },
+    Label(EcoString),
 }
 impl Tac for Instr {
     type Output = Vec<assembly::Instr>;
@@ -110,7 +126,18 @@ impl Tac for Instr {
                         assembly::Instr::Mov(assembly::Operand::Reg(res), dst.to_asm()),
                     ]
                 }
+                BinOp::Equal => todo!(),
+                BinOp::NotEqual => todo!(),
+                BinOp::LessThan => todo!(),
+                BinOp::LessOrEqual => todo!(),
+                BinOp::GreaterThan => todo!(),
+                BinOp::GreaterOrEqual => todo!(),
             },
+            Instr::Copy { .. } => todo!(),
+            Instr::Jump { .. } => todo!(),
+            Instr::JumpIfZero { .. } => todo!(),
+            Instr::JumpIfNotZero { .. } => todo!(),
+            Instr::Label(_) => todo!(),
         }
     }
 }
@@ -143,6 +170,7 @@ impl Tac for Place {
 pub enum UnOp {
     Complement,
     Negate,
+    Not,
 }
 impl Tac for UnOp {
     type Output = assembly::Operator;
@@ -150,6 +178,7 @@ impl Tac for UnOp {
         match self {
             UnOp::Complement => assembly::Operator::Not,
             UnOp::Negate => assembly::Operator::Neg,
+            UnOp::Not => todo!(),
         }
     }
 }
@@ -161,12 +190,20 @@ pub enum BinOp {
     Multiply,
     Divide,
     Reminder,
-
+    // Chapter 3 Extra credit
     BitAnd,
     BitOr,
     BitXor,
     LeftShift,
     RightShift,
+
+    // Chapter 4
+    Equal,
+    NotEqual,
+    LessThan,
+    LessOrEqual,
+    GreaterThan,
+    GreaterOrEqual,
 }
 impl Tac for BinOp {
     type Output = assembly::Operator;
@@ -175,7 +212,6 @@ impl Tac for BinOp {
             Self::Add => assembly::Operator::Add,
             Self::Subtract => assembly::Operator::Sub,
             Self::Multiply => assembly::Operator::Mul,
-
             Self::BitAnd => assembly::Operator::And,
             Self::BitOr => assembly::Operator::Or,
             Self::BitXor => assembly::Operator::Xor,
@@ -185,6 +221,13 @@ impl Tac for BinOp {
             Self::Divide | Self::Reminder => {
                 unreachable!("Divide and Reminder are implemented in other ways")
             }
+
+            BinOp::Equal => todo!(),
+            BinOp::NotEqual => todo!(),
+            BinOp::LessThan => todo!(),
+            BinOp::LessOrEqual => todo!(),
+            BinOp::GreaterThan => todo!(),
+            BinOp::GreaterOrEqual => todo!(),
         }
     }
 }

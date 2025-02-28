@@ -84,6 +84,7 @@ pub enum Expr {
 impl Node for Expr {
     type Output = tac::Value;
     #[allow(clippy::cast_sign_loss)]
+    #[allow(clippy::too_many_lines)]
     fn to_tac(&self, instrs: &mut Vec<tac::Instr>) -> Self::Output {
         match self {
             Expr::ConstInt(i) => tac::Value::Const(*i as u32),
@@ -102,6 +103,92 @@ impl Node for Expr {
                     src,
                     dst: dst.clone(),
                 });
+
+                tac::Value::Var(dst)
+            }
+            Expr::Binary {
+                op: BinaryOp::And,
+                lhs,
+                rhs,
+            } => {
+                static AND: AtomicUsize = AtomicUsize::new(0);
+                let counter = AND.fetch_add(1, Relaxed);
+
+                let if_false = eco_format!("and.fls.{}", counter);
+                let end = eco_format!("and.end.{}", counter);
+
+                let dst_name = eco_format!("and.tmp.{}", counter);
+                let dst = tac::Place(dst_name);
+
+                let v1 = lhs.to_tac(instrs);
+                instrs.push(tac::Instr::JumpIfZero {
+                    cond: v1,
+                    target: if_false.clone(),
+                });
+
+                let v2 = rhs.to_tac(instrs);
+                instrs.extend([
+                    tac::Instr::JumpIfZero {
+                        cond: v2,
+                        target: if_false.clone(),
+                    },
+                    tac::Instr::Copy {
+                        src: tac::Value::Const(1),
+                        dst: dst.clone(),
+                    },
+                    tac::Instr::Jump {
+                        target: end.clone(),
+                    },
+                    tac::Instr::Label(if_false),
+                    tac::Instr::Copy {
+                        src: tac::Value::Const(0),
+                        dst: dst.clone(),
+                    },
+                    tac::Instr::Label(end),
+                ]);
+
+                tac::Value::Var(dst)
+            }
+            Expr::Binary {
+                op: BinaryOp::Or,
+                lhs,
+                rhs,
+            } => {
+                static OR: AtomicUsize = AtomicUsize::new(0);
+                let counter = OR.fetch_add(1, Relaxed);
+
+                let if_true = eco_format!("or.tru.{}", counter);
+                let end = eco_format!("or.end.{}", counter);
+
+                let dst_name = eco_format!("or.tmp.{}", counter);
+                let dst = tac::Place(dst_name);
+
+                let v1 = lhs.to_tac(instrs);
+                instrs.push(tac::Instr::JumpIfNotZero {
+                    cond: v1,
+                    target: if_true.clone(),
+                });
+
+                let v2 = rhs.to_tac(instrs);
+                instrs.extend([
+                    tac::Instr::JumpIfNotZero {
+                        cond: v2,
+                        target: if_true.clone(),
+                    },
+                    tac::Instr::Copy {
+                        src: tac::Value::Const(0),
+                        dst: dst.clone(),
+                    },
+                    tac::Instr::Jump {
+                        target: end.clone(),
+                    },
+                    tac::Instr::Label(if_true),
+                    tac::Instr::Copy {
+                        src: tac::Value::Const(1),
+                        dst: dst.clone(),
+                    },
+                    tac::Instr::Label(end),
+                ]);
 
                 tac::Value::Var(dst)
             }
@@ -144,7 +231,7 @@ impl Node for UnaryOp {
         match self {
             UnaryOp::Complement => tac::UnOp::Complement,
             UnaryOp::Negate => tac::UnOp::Negate,
-            UnaryOp::Not => todo!(),
+            UnaryOp::Not => tac::UnOp::Not,
 
             UnaryOp::Plus => unreachable!("noop operation"),
         }
@@ -159,7 +246,6 @@ pub enum BinaryOp {
     Divide,
     Reminder,
 
-    
     And,
     Or,
     Equal,
@@ -186,14 +272,14 @@ impl Node for BinaryOp {
             BinaryOp::Divide => tac::BinOp::Divide,
             BinaryOp::Reminder => tac::BinOp::Reminder,
 
-            BinaryOp::And => todo!(),
-            BinaryOp::Or => todo!(),
-            BinaryOp::Equal => todo!(),
-            BinaryOp::NotEqual => todo!(),
-            BinaryOp::LessThan => todo!(),
-            BinaryOp::LessOrEqual => todo!(),
-            BinaryOp::GreaterThan => todo!(),
-            BinaryOp::GreaterOrEqual => todo!(),
+            // chapter 4
+            BinaryOp::And | BinaryOp::Or => unreachable!("And and Or have special logic"),
+            BinaryOp::Equal => tac::BinOp::Equal,
+            BinaryOp::NotEqual => tac::BinOp::NotEqual,
+            BinaryOp::LessThan => tac::BinOp::LessThan,
+            BinaryOp::LessOrEqual => tac::BinOp::LessOrEqual,
+            BinaryOp::GreaterThan => tac::BinOp::GreaterThan,
+            BinaryOp::GreaterOrEqual => tac::BinOp::GreaterOrEqual,
 
             // extra credit
             BinaryOp::BitAnd => tac::BinOp::BitAnd,

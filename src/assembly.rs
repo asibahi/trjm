@@ -1,8 +1,9 @@
 use ecow::EcoString;
+use either::Either;
 use rustc_hash::FxHashMap;
 use std::{collections::hash_map::Entry, io::Write};
 
-pub trait Assembly {
+pub trait Assembly: Clone {
     fn emit_code(&self, f: &mut impl Write);
 
     fn replace_pseudos(&mut self, map: &mut FxHashMap<EcoString, u32>, stack_depth: &mut u32);
@@ -24,6 +25,31 @@ where
 
     fn adjust_instrs(&mut self, stack_depth: u32) {
         self.iter_mut().for_each(|e| e.adjust_instrs(stack_depth));
+    }
+}
+impl<T, U> Assembly for Either<T, U>
+where
+    T: Assembly,
+    U: Assembly,
+{
+    fn emit_code(&self, f: &mut impl Write) {
+        self.as_ref()
+            .either_with(f, |f, t| t.emit_code(f), |f, u| u.emit_code(f));
+    }
+
+    fn replace_pseudos(&mut self, map: &mut FxHashMap<EcoString, u32>, stack_depth: &mut u32) {
+        self.as_mut().either_with(
+            (map, stack_depth),
+            |(m, s), t| t.replace_pseudos(m, s),
+            |(m, s), u| u.replace_pseudos(m, s),
+        );
+    }
+
+    fn adjust_instrs(&mut self, stack_depth: u32) {
+        self.as_mut().either(
+            |t| t.adjust_instrs(stack_depth),
+            |u| u.adjust_instrs(stack_depth),
+        );
     }
 }
 
@@ -83,12 +109,22 @@ impl Assembly for FuncDef {
             for instr in std::mem::take(&mut self.instrs) {
                 match instr {
                     Instr::Mov(src @ Operand::Stack(_), dst @ Operand::Stack(_)) => out.extend([
-                        Instr::Mov(src, Operand::Reg(Register::R10)),
-                        Instr::Mov(Operand::Reg(Register::R10), dst),
+                        Instr::Mov(src, Operand::Reg(R10)),
+                        Instr::Mov(Operand::Reg(R10), dst),
                     ]),
+                    Instr::Cmp(src @ Operand::Stack(_), dst @ Operand::Stack(_)) => out.extend([
+                        Instr::Mov(src, Operand::Reg(R10)),
+                        Instr::Cmp(Operand::Reg(R10), dst),
+                    ]),
+                    Instr::Cmp(src, dst @ Operand::Imm(_)) => {
+                        out.extend([
+                            Instr::Mov(dst, Operand::Reg(R11)),
+                            Instr::Cmp(src, Operand::Reg(R11)),
+                        ]);
+                    }
                     Instr::Idiv(v @ Operand::Imm(_)) => out.extend([
-                        Instr::Mov(v, Operand::Reg(Register::R10)),
-                        Instr::Idiv(Operand::Reg(Register::R10)),
+                        Instr::Mov(v, Operand::Reg(R10)),
+                        Instr::Idiv(Operand::Reg(R10)),
                     ]),
                     Instr::Binary(
                         opp @ (Operator::Add
@@ -99,21 +135,21 @@ impl Assembly for FuncDef {
                         src @ Operand::Stack(_),
                         dst @ Operand::Stack(_),
                     ) => out.extend([
-                        Instr::Mov(src, Operand::Reg(Register::R10)),
-                        Instr::Binary(opp, Operand::Reg(Register::R10), dst),
+                        Instr::Mov(src, Operand::Reg(R10)),
+                        Instr::Binary(opp, Operand::Reg(R10), dst),
                     ]),
                     Instr::Binary(Operator::Mul, src, dst @ Operand::Stack(_)) => out.extend([
-                        Instr::Mov(dst.clone(), Operand::Reg(Register::R11)),
-                        Instr::Binary(Operator::Mul, src, Operand::Reg(Register::R11)),
-                        Instr::Mov(Operand::Reg(Register::R11), dst),
+                        Instr::Mov(dst.clone(), Operand::Reg(R11)),
+                        Instr::Binary(Operator::Mul, src, Operand::Reg(R11)),
+                        Instr::Mov(Operand::Reg(R11), dst),
                     ]),
                     Instr::Binary(
                         opp @ (Operator::Shl | Operator::Shr),
                         src,
                         dst @ Operand::Stack(_),
                     ) => out.extend([
-                        Instr::Mov(src, Operand::Reg(Register::CX)),
-                        Instr::Binary(opp, Operand::Reg(Register::CL), dst),
+                        Instr::Mov(src, Operand::Reg(CX)),
+                        Instr::Binary(opp, Operand::Reg(CL), dst),
                     ]),
                     other => out.push(other),
                 }
@@ -128,8 +164,13 @@ pub enum Instr {
     Mov(Operand, Operand),
     Unary(Operator, Operand),
     Binary(Operator, Operand, Operand),
+    Cmp(Operand, Operand),
     Idiv(Operand),
     Cdq,
+    Jmp(EcoString),
+    JmpCC(CondCode, EcoString),
+    SetCC(CondCode, Operand),
+    Label(EcoString),
     AllocateStack(u32),
     Ret,
 }
@@ -143,14 +184,14 @@ impl Assembly for Instr {
                 dst.emit_code(f);
                 _ = writeln!(f);
             }
-            Instr::Unary(un_op, operand) => {
+            Self::Unary(un_op, operand) => {
                 _ = write!(f, "\t");
                 un_op.emit_code(f);
                 _ = write!(f, " ");
                 operand.emit_code(f);
                 _ = writeln!(f);
             }
-            Instr::Binary(bin_op, op1, op2) => {
+            Self::Binary(bin_op, op1, op2) => {
                 _ = write!(f, "\t");
                 bin_op.emit_code(f);
                 _ = write!(f, " ");
@@ -159,36 +200,47 @@ impl Assembly for Instr {
                 op2.emit_code(f);
                 _ = writeln!(f);
             }
-            Instr::Idiv(operand) => {
+            Self::Idiv(operand) => {
                 _ = write!(f, "\tidivl ");
                 operand.emit_code(f);
                 _ = writeln!(f);
             }
-            Instr::Cdq => _ = writeln!(f, "\tcdq"),
-            Instr::AllocateStack(i) => _ = writeln!(f, "\tsubq ${i}, %rsp"),
+            Self::Cdq => _ = writeln!(f, "\tcdq"),
+            Self::AllocateStack(i) => _ = writeln!(f, "\tsubq ${i}, %rsp"),
             Self::Ret => {
                 _ = writeln!(f, "\tmovq %rbp, %rsp");
                 _ = writeln!(f, "\tpopq %rbp");
                 _ = writeln!(f, "\tret");
             }
+
+            Self::Cmp(..) => todo!(),
+            Self::Jmp(..) => todo!(),
+            Self::JmpCC(..) => todo!(),
+            Self::SetCC(..) => todo!(),
+            Self::Label(..) => todo!(),
         }
     }
 
     fn replace_pseudos(&mut self, map: &mut FxHashMap<EcoString, u32>, stack_depth: &mut u32) {
         match self {
-            Instr::Mov(src, dst) => {
-                src.replace_pseudos(map, stack_depth);
-                dst.replace_pseudos(map, stack_depth);
+            Self::Mov(opp1, opp2) | Self::Cmp(opp1, opp2) => {
+                opp1.replace_pseudos(map, stack_depth);
+                opp2.replace_pseudos(map, stack_depth);
             }
-            Instr::Unary(_, opp) | Instr::Idiv(opp) => {
+            Self::Unary(_, opp) | Self::Idiv(opp) | Self::SetCC(_, opp) => {
                 opp.replace_pseudos(map, stack_depth);
             }
-            Instr::Binary(bin_op, opp1, opp2) => {
+            Self::Binary(bin_op, opp1, opp2) => {
                 bin_op.replace_pseudos(map, stack_depth);
                 opp1.replace_pseudos(map, stack_depth);
                 opp2.replace_pseudos(map, stack_depth);
             }
-            Instr::Cdq | Instr::AllocateStack(_) | Instr::Ret => (),
+            Self::Cdq
+            | Self::AllocateStack(_)
+            | Self::Ret
+            | Self::Jmp(..)
+            | Self::JmpCC(..)
+            | Self::Label(..) => (),
         }
     }
 
@@ -277,13 +329,33 @@ pub enum Register {
 impl Assembly for Register {
     fn emit_code(&self, f: &mut impl Write) {
         match self {
-            Register::AX => _ = write!(f, "%eax"),
-            Register::DX => _ = write!(f, "%edx"),
-            Register::R10 => _ = write!(f, "%r10d"),
-            Register::R11 => _ = write!(f, "%r11d"),
-            Register::CX => _ = write!(f, "%ecx"),
-            Register::CL => _ = write!(f, "%cl"),
+            AX => _ = write!(f, "%eax"),
+            DX => _ = write!(f, "%edx"),
+            R10 => _ = write!(f, "%r10d"),
+            R11 => _ = write!(f, "%r11d"),
+            CX => _ = write!(f, "%ecx"),
+            CL => _ = write!(f, "%cl"),
         }
+    }
+
+    fn replace_pseudos(&mut self, _: &mut FxHashMap<EcoString, u32>, _: &mut u32) {}
+    fn adjust_instrs(&mut self, _: u32) {}
+}
+#[allow(clippy::enum_glob_use)]
+use Register::*;
+
+#[derive(Debug, Clone, Copy)]
+pub enum CondCode {
+    E,
+    NE,
+    G,
+    GE,
+    L,
+    LE,
+}
+impl Assembly for CondCode {
+    fn emit_code(&self, f: &mut impl Write) {
+        todo!()
     }
 
     fn replace_pseudos(&mut self, _: &mut FxHashMap<EcoString, u32>, _: &mut u32) {}

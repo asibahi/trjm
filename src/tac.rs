@@ -1,7 +1,12 @@
 #![allow(refining_impl_trait_internal)]
 
-use crate::assembly;
+use crate::assembly::{
+    self,
+    CondCode::{E, NE},
+    Instr as AsmInst, Operand, Operator, Register,
+};
 use ecow::EcoString;
+use either::Either::{self, Left, Right};
 
 pub trait Tac: std::fmt::Debug + Clone {
     type Output: assembly::Assembly;
@@ -73,21 +78,31 @@ pub enum Instr {
     Label(EcoString),
 }
 impl Tac for Instr {
-    type Output = Vec<assembly::Instr>;
+    type Output = Vec<AsmInst>;
     fn to_asm(&self) -> Self::Output {
         match self {
             Instr::Return(value) => vec![
-                assembly::Instr::Mov(
-                    value.to_asm(),
-                    assembly::Operand::Reg(assembly::Register::AX),
-                ),
-                assembly::Instr::Ret,
+                AsmInst::Mov(value.to_asm(), Operand::Reg(Register::AX)),
+                AsmInst::Ret,
             ],
+            Instr::Unary {
+                op: UnOp::Not,
+                src,
+                dst,
+            } => {
+                let dst = dst.to_asm();
+                vec![
+                    AsmInst::Cmp(Operand::Imm(0), src.to_asm()),
+                    AsmInst::Binary(Operator::Xor, dst.clone(), dst.clone()),
+                    // AsmInst::Mov(Operand::Imm(0), dst.clone()), // zero stuff : replace with XOR ?
+                    AsmInst::SetCC(E, dst),
+                ]
+            }
             Instr::Unary { op, src, dst } => {
                 let dst = dst.to_asm();
                 vec![
-                    assembly::Instr::Mov(src.to_asm(), dst.clone()),
-                    assembly::Instr::Unary(op.to_asm(), dst),
+                    AsmInst::Mov(src.to_asm(), dst.clone()),
+                    AsmInst::Unary(op.to_asm(), dst),
                 ]
             }
             Instr::Binary {
@@ -106,38 +121,49 @@ impl Tac for Instr {
                 | BinOp::RightShift => {
                     let dst = dst.to_asm();
                     vec![
-                        assembly::Instr::Mov(src1.to_asm(), dst.clone()),
-                        assembly::Instr::Binary(op.to_asm(), src2.to_asm(), dst),
+                        AsmInst::Mov(src1.to_asm(), dst.clone()),
+                        AsmInst::Binary(op.to_asm().unwrap_left(), src2.to_asm(), dst),
                     ]
                 }
                 BinOp::Divide | BinOp::Reminder => {
                     let res = match op {
-                        BinOp::Divide => assembly::Register::AX,
-                        BinOp::Reminder => assembly::Register::DX,
+                        BinOp::Divide => Register::AX,
+                        BinOp::Reminder => Register::DX,
                         _ => unreachable!(),
                     };
                     vec![
-                        assembly::Instr::Mov(
-                            src1.to_asm(),
-                            assembly::Operand::Reg(assembly::Register::AX),
-                        ),
-                        assembly::Instr::Cdq,
-                        assembly::Instr::Idiv(src2.to_asm()),
-                        assembly::Instr::Mov(assembly::Operand::Reg(res), dst.to_asm()),
+                        AsmInst::Mov(src1.to_asm(), Operand::Reg(Register::AX)),
+                        AsmInst::Cdq,
+                        AsmInst::Idiv(src2.to_asm()),
+                        AsmInst::Mov(Operand::Reg(res), dst.to_asm()),
                     ]
                 }
-                BinOp::Equal => todo!(),
-                BinOp::NotEqual => todo!(),
-                BinOp::LessThan => todo!(),
-                BinOp::LessOrEqual => todo!(),
-                BinOp::GreaterThan => todo!(),
-                BinOp::GreaterOrEqual => todo!(),
+                BinOp::Equal
+                | BinOp::NotEqual
+                | BinOp::LessThan
+                | BinOp::LessOrEqual
+                | BinOp::GreaterThan
+                | BinOp::GreaterOrEqual => {
+                    let dst = dst.to_asm();
+                    vec![
+                        AsmInst::Cmp(src2.to_asm(), src1.to_asm()),
+                        AsmInst::Binary(Operator::Xor, dst.clone(), dst.clone()),
+                        // AsmInst::Mov(Operand::Imm(0), dst.clone()), // zero stuff : replace with XOR ?
+                        AsmInst::SetCC(op.to_asm().unwrap_right(), dst),
+                    ]
+                }
             },
-            Instr::Copy { .. } => todo!(),
-            Instr::Jump { .. } => todo!(),
-            Instr::JumpIfZero { .. } => todo!(),
-            Instr::JumpIfNotZero { .. } => todo!(),
-            Instr::Label(_) => todo!(),
+            Instr::Copy { src, dst } => vec![AsmInst::Mov(src.to_asm(), dst.to_asm())],
+            Instr::Jump { target } => vec![AsmInst::Jmp(target.clone())],
+            Instr::JumpIfZero { cond, target } => vec![
+                AsmInst::Cmp(Operand::Imm(0), cond.to_asm()),
+                AsmInst::JmpCC(E, target.clone()),
+            ],
+            Instr::JumpIfNotZero { cond, target } => vec![
+                AsmInst::Cmp(Operand::Imm(0), cond.to_asm()),
+                AsmInst::JmpCC(NE, target.clone()),
+            ],
+            Instr::Label(name) => vec![AsmInst::Label(name.clone())],
         }
     }
 }
@@ -148,10 +174,10 @@ pub enum Value {
     Var(Place),
 }
 impl Tac for Value {
-    type Output = assembly::Operand;
+    type Output = Operand;
     fn to_asm(&self) -> Self::Output {
         match self {
-            Value::Const(i) => assembly::Operand::Imm(*i),
+            Value::Const(i) => Operand::Imm(*i),
             Value::Var(place) => place.to_asm(),
         }
     }
@@ -160,9 +186,9 @@ impl Tac for Value {
 #[derive(Debug, Clone)]
 pub struct Place(pub EcoString);
 impl Tac for Place {
-    type Output = assembly::Operand;
+    type Output = Operand;
     fn to_asm(&self) -> Self::Output {
-        assembly::Operand::Pseudo(self.0.clone())
+        Operand::Pseudo(self.0.clone())
     }
 }
 
@@ -173,12 +199,12 @@ pub enum UnOp {
     Not,
 }
 impl Tac for UnOp {
-    type Output = assembly::Operator;
+    type Output = Operator;
     fn to_asm(&self) -> Self::Output {
         match self {
-            UnOp::Complement => assembly::Operator::Not,
-            UnOp::Negate => assembly::Operator::Neg,
-            UnOp::Not => todo!(),
+            UnOp::Complement => Operator::Not,
+            UnOp::Negate => Operator::Neg,
+            UnOp::Not => unreachable!("Not is implemented otherwise"),
         }
     }
 }
@@ -206,28 +232,28 @@ pub enum BinOp {
     GreaterOrEqual,
 }
 impl Tac for BinOp {
-    type Output = assembly::Operator;
+    type Output = Either<Operator, assembly::CondCode>;
     fn to_asm(&self) -> Self::Output {
         match self {
-            Self::Add => assembly::Operator::Add,
-            Self::Subtract => assembly::Operator::Sub,
-            Self::Multiply => assembly::Operator::Mul,
-            Self::BitAnd => assembly::Operator::And,
-            Self::BitOr => assembly::Operator::Or,
-            Self::BitXor => assembly::Operator::Xor,
-            Self::LeftShift => assembly::Operator::Shl,
-            Self::RightShift => assembly::Operator::Shr,
+            Self::Add => Left(Operator::Add),
+            Self::Subtract => Left(Operator::Sub),
+            Self::Multiply => Left(Operator::Mul),
+            Self::BitAnd => Left(Operator::And),
+            Self::BitOr => Left(Operator::Or),
+            Self::BitXor => Left(Operator::Xor),
+            Self::LeftShift => Left(Operator::Shl),
+            Self::RightShift => Left(Operator::Shr),
 
             Self::Divide | Self::Reminder => {
                 unreachable!("Divide and Reminder are implemented in other ways")
             }
 
-            BinOp::Equal => todo!(),
-            BinOp::NotEqual => todo!(),
-            BinOp::LessThan => todo!(),
-            BinOp::LessOrEqual => todo!(),
-            BinOp::GreaterThan => todo!(),
-            BinOp::GreaterOrEqual => todo!(),
+            BinOp::Equal => Right(assembly::CondCode::E),
+            BinOp::NotEqual => Right(assembly::CondCode::NE),
+            BinOp::LessThan => Right(assembly::CondCode::L),
+            BinOp::LessOrEqual => Right(assembly::CondCode::LE),
+            BinOp::GreaterThan => Right(assembly::CondCode::G),
+            BinOp::GreaterOrEqual => Right(assembly::CondCode::GE),
         }
     }
 }

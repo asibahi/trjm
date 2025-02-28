@@ -59,17 +59,16 @@ pub fn compile(input: &PathBuf, mode: Mode) -> Result<PathBuf, u8> {
     if matches!(mode, Mode::Codegen) {
         eprintln!("{prgm:#?}");
 
+        return Err(0);
+    }
+
+    if matches!(mode, Mode::Assembly) {
         let mut buf = Vec::new();
         prgm.emit_code(&mut buf);
 
         let buf = String::from_utf8_lossy(&buf);
         eprintln!("{buf}");
-
         return Err(0);
-    }
-
-    if matches!(mode, Mode::Assembly) {
-        unimplemented!("Part 3");
     }
 
     let output = input.with_extension("s");

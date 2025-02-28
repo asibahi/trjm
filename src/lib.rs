@@ -2,13 +2,12 @@ use std::{fs::read_to_string, io::Write, path::PathBuf};
 
 mod assembly;
 mod ast;
+mod ir;
 mod lexer;
 mod parser;
-mod tac;
 mod token;
 
-use assembly::Assembly;
-use tac::Tac;
+use assembly::{Assembly, ToAsm};
 
 #[derive(Clone, Copy)]
 pub enum Mode {

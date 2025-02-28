@@ -1,5 +1,6 @@
+use crate::ir;
 use ecow::EcoString;
-use either::Either;
+use either::Either::{self, Left, Right};
 use rustc_hash::FxHashMap;
 use std::{collections::hash_map::Entry, io::Write};
 
@@ -395,6 +396,8 @@ pub enum CondCode {
     G,
     GE,
 }
+#[allow(clippy::enum_glob_use)]
+use CondCode::*;
 impl Assembly for CondCode {
     fn emit_code(&self, f: &mut impl Write) {
         match self {
@@ -409,4 +412,177 @@ impl Assembly for CondCode {
 
     fn replace_pseudos(&mut self, _: &mut FxHashMap<EcoString, u32>, _: &mut u32) {}
     fn adjust_instrs(&mut self, _: u32) {}
+}
+
+// =========
+
+pub trait ToAsm: std::fmt::Debug + Clone {
+    type Output: Assembly;
+    fn to_asm(&self) -> Self::Output;
+}
+impl<T> ToAsm for Vec<T>
+where
+    T: ToAsm,
+{
+    type Output = Vec<T::Output>;
+    fn to_asm(&self) -> Self::Output {
+        self.iter().map(ToAsm::to_asm).collect()
+    }
+}
+
+impl ToAsm for ir::Program {
+    type Output = Program;
+    fn to_asm(&self) -> Self::Output {
+        Program(self.0.to_asm())
+    }
+}
+
+impl ToAsm for ir::FuncDef {
+    type Output = FuncDef;
+    fn to_asm(&self) -> Self::Output {
+        FuncDef {
+            name: self.name.clone(),
+            instrs: self.body.to_asm().iter().flatten().cloned().collect(),
+        }
+    }
+}
+
+impl ToAsm for ir::Instr {
+    type Output = Vec<Instr>;
+    fn to_asm(&self) -> Self::Output {
+        match self {
+            Self::Return(value) => vec![
+                Instr::Mov(value.to_asm(), Operand::Reg(Register::AX)),
+                Instr::Ret,
+            ],
+            Self::Unary {
+                op: ir::UnOp::Not,
+                src,
+                dst,
+            } => {
+                let dst = dst.to_asm();
+                vec![
+                    Instr::Cmp(Operand::Imm(0), src.to_asm()),
+                    Instr::Mov(Operand::Imm(0), dst.clone()), // zero stuff : replacing with XOR breaks code
+                    Instr::SetCC(E, dst),
+                ]
+            }
+            Self::Unary { op, src, dst } => {
+                let dst = dst.to_asm();
+                vec![
+                    Instr::Mov(src.to_asm(), dst.clone()),
+                    Instr::Unary(op.to_asm(), dst),
+                ]
+            }
+            Self::Binary {
+                op,
+                src1,
+                src2,
+                dst,
+            } => match op {
+                ir::BinOp::Add
+                | ir::BinOp::Subtract
+                | ir::BinOp::Multiply
+                | ir::BinOp::BitAnd
+                | ir::BinOp::BitOr
+                | ir::BinOp::BitXor
+                | ir::BinOp::LeftShift
+                | ir::BinOp::RightShift => {
+                    let dst = dst.to_asm();
+                    vec![
+                        Instr::Mov(src1.to_asm(), dst.clone()),
+                        Instr::Binary(op.to_asm().unwrap_left(), src2.to_asm(), dst),
+                    ]
+                }
+                ir::BinOp::Divide | ir::BinOp::Reminder => {
+                    let res = match op {
+                        ir::BinOp::Divide => Register::AX,
+                        ir::BinOp::Reminder => Register::DX,
+                        _ => unreachable!(),
+                    };
+                    vec![
+                        Instr::Mov(src1.to_asm(), Operand::Reg(Register::AX)),
+                        Instr::Cdq,
+                        Instr::Idiv(src2.to_asm()),
+                        Instr::Mov(Operand::Reg(res), dst.to_asm()),
+                    ]
+                }
+                ir::BinOp::Equal
+                | ir::BinOp::NotEqual
+                | ir::BinOp::LessThan
+                | ir::BinOp::LessOrEqual
+                | ir::BinOp::GreaterThan
+                | ir::BinOp::GreaterOrEqual => {
+                    let dst = dst.to_asm();
+                    vec![
+                        Instr::Cmp(src2.to_asm(), src1.to_asm()),
+                        Instr::Mov(Operand::Imm(0), dst.clone()), // zero stuff : replacing with XOR breaks code
+                        Instr::SetCC(op.to_asm().unwrap_right(), dst),
+                    ]
+                }
+            },
+            Self::Copy { src, dst } => vec![Instr::Mov(src.to_asm(), dst.to_asm())],
+            Self::Jump { target } => vec![Instr::Jmp(target.clone())],
+            Self::JumpIfZero { cond, target } => vec![
+                Instr::Cmp(Operand::Imm(0), cond.to_asm()),
+                Instr::JmpCC(E, target.clone()),
+            ],
+            Self::JumpIfNotZero { cond, target } => vec![
+                Instr::Cmp(Operand::Imm(0), cond.to_asm()),
+                Instr::JmpCC(NE, target.clone()),
+            ],
+            Self::Label(name) => vec![Instr::Label(name.clone())],
+        }
+    }
+}
+impl ToAsm for ir::Value {
+    type Output = Operand;
+    fn to_asm(&self) -> Self::Output {
+        match self {
+            Self::Const(i) => Operand::Imm(*i),
+            Self::Var(place) => place.to_asm(),
+        }
+    }
+}
+impl ToAsm for ir::Place {
+    type Output = Operand;
+    fn to_asm(&self) -> Self::Output {
+        Operand::Pseudo(self.0.clone())
+    }
+}
+impl ToAsm for ir::UnOp {
+    type Output = Operator;
+    fn to_asm(&self) -> Self::Output {
+        match self {
+            Self::Complement => Operator::Not,
+            Self::Negate => Operator::Neg,
+            Self::Not => unreachable!("Not is implemented otherwise"),
+        }
+    }
+}
+impl ToAsm for ir::BinOp {
+    type Output = Either<Operator, CondCode>;
+    fn to_asm(&self) -> Self::Output {
+        match self {
+            Self::Add => Left(Operator::Add),
+            Self::Subtract => Left(Operator::Sub),
+            Self::Multiply => Left(Operator::Mul),
+            Self::BitAnd => Left(Operator::And),
+            Self::BitOr => Left(Operator::Or),
+            Self::BitXor => Left(Operator::Xor),
+            Self::LeftShift => Left(Operator::Shl),
+            Self::RightShift => Left(Operator::Shr),
+
+            Self::Divide | Self::Reminder => {
+                unreachable!("Divide and Reminder are implemented in other ways")
+            }
+
+            Self::Equal => Right(CondCode::E),
+            Self::NotEqual => Right(CondCode::NE),
+            Self::LessThan => Right(CondCode::L),
+            Self::LessOrEqual => Right(CondCode::LE),
+            Self::GreaterThan => Right(CondCode::G),
+            Self::GreaterOrEqual => Right(CondCode::GE),
+        }
+    }
 }

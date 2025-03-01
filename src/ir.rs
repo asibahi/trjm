@@ -140,6 +140,8 @@ impl ToIr for ast::Stmt {
             }
 
             Self::Null => {}
+            Self::Switch(..) => unimplemented!(),
+            _ => todo!()
         }
     }
 }

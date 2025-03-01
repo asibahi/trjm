@@ -2,6 +2,7 @@
 
 use crate::ir::{self, ToIr};
 use ecow::{EcoString, eco_format};
+use either::Either;
 use rustc_hash::FxHashMap;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
@@ -50,16 +51,43 @@ impl FuncDef {
 }
 
 #[derive(Debug, Clone)]
+#[expect(dead_code)]
 pub enum Stmt {
     Return(Expr),
     Expression(Expr),
-    If { cond: Expr, then: Box<Stmt>, else_: Option<Box<Stmt>> },
+    If {
+        cond: Expr,
+        then: Box<Stmt>,
+        else_: Option<Box<Stmt>>,
+    },
 
     Compound(Block),
+
+    Break(Option<EcoString>),
+    Continue(Option<EcoString>),
+    While {
+        cond: Expr,
+        body: Box<Stmt>,
+        label: Option<EcoString>,
+    },
+    DoWhile {
+        body: Box<Stmt>,
+        cond: Expr,
+        label: Option<EcoString>,
+    },
+    For {
+        init: Either<Decl, Option<Expr>>,
+        cond: Option<Expr>,
+        post: Option<Expr>,
+
+        body: Box<Stmt>,
+        label: Option<EcoString>,
+    },
 
     // extra credit
     GoTo(EcoString),
     Label(EcoString, Box<Stmt>),
+    Switch(()),
 
     Null,
 }
@@ -86,8 +114,43 @@ impl Stmt {
             g @ Self::GoTo(_) => Some(g),
 
             Self::Compound(block) => Some(Self::Compound(block.resolve_variables(map)?)),
+            Self::While { .. /* cond, body, label */ } => {
+                todo!()
+                // let cond = cond.resolve_variables(map)?;
+                // let body = Box::new(body.resolve_variables(map)?);
 
-            n @ Self::Null => Some(n),
+                // Some(Self::While { cond, body, label: label.clone() })
+            }
+            Self::DoWhile { .. /* cond, body, label */ } => {
+                todo!()
+                // let cond = cond.resolve_variables(map)?;
+                // let body = Box::new(body.resolve_variables(map)?);
+
+                // Some(Self::DoWhile { cond, body, label: label.clone() })
+            }
+            Self::For {  .. /*  init, cond, post, body, label */ } => {
+                todo!()
+                // let cond = match cond {
+                //     Some(cond) => Some(cond.resolve_variables(map)?),
+                //     None => None,
+                // };
+                // let post = match post {
+                //     Some(post) => Some(post.resolve_variables(map)?),
+                //     None => None,
+                // };
+                // let init = match init {
+                //     Left(decl) => Left(decl.resolve_variables(map)?),
+                //     Right(Some(expr)) => Right(Some(expr.resolve_variables(map)?)),
+                //     Right(None) => Right(None),
+                // };
+                // let body = Box::new(body.resolve_variables(map)?);
+
+                // Some(Self::For { init, cond, post, body, label: label.clone() })
+            }
+
+            Self::Switch(..) => unimplemented!(),
+
+            n @ (Self::Null | Self::Break(_) | Self::Continue(_)) => Some(n),
         }
     }
     fn resolve_labels(self, labels: &mut Namespace<bool>) -> Option<Self> {
@@ -120,7 +183,17 @@ impl Stmt {
                 Some(Self::If { cond, then, else_ })
             }
             Self::Compound(block) => Some(Self::Compound(block.resolve_labels(labels)?)),
-            any @ (Self::Return(_) | Self::Null | Self::Expression(_)) => Some(any),
+            any @ (Self::Return(_)
+            | Self::Null
+            | Self::Expression(_)
+            | Self::Break(_)
+            | Self::Continue(_)) => Some(any),
+
+            Self::While { .. } => todo!(),
+            Self::DoWhile { .. } => todo!(),
+            Self::For { .. } => todo!(),
+
+            Self::Switch(_) => unimplemented!(),
         }
     }
 }

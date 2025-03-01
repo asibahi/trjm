@@ -17,6 +17,7 @@ pub(crate) enum Token {
     If,
     Else,
     GoTo,
+    Do, While, For, Break, Continue,
 
     // Operators
     Plus,      // +

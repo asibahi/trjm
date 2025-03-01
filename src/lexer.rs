@@ -155,6 +155,11 @@ token!(
         "if" => Token::If,
         "else" => Token::Else,
         "goto" => Token::GoTo,
+        "do" => Token::Do,
+        "while" => Token::While,
+        "for" => Token::For,
+        "break" => Token::Break,
+        "continue" => Token::Continue,
         s => Token::Ident(s.into()),
     })
 );

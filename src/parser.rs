@@ -3,13 +3,14 @@ use crate::{
     token::{Token, Tokens},
 };
 use ecow::EcoString;
+use either::Either::{Left, Right};
 use nom::{
     Finish, IResult, Parser,
     branch::alt,
     bytes::take,
     combinator::{all_consuming, opt, verify},
     multi::many,
-    sequence::{delimited, preceded, terminated},
+    sequence::{delimited, preceded, separated_pair, terminated},
 };
 use nom_language::precedence::{Assoc, Operation, binary_op, precedence, unary_op};
 
@@ -97,9 +98,48 @@ fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
     let label = (terminated(parse_ident, tag_token!(Token::Colon)), parse_stmt)
         .map(|(n, s)| Stmt::Label(n, Box::new(s)));
 
+    let break_ = terminated(tag_token!(Token::Break), tag_token!(Token::Semicolon))
+        .map(|_| Stmt::Break(None));
+    let continue_ = terminated(tag_token!(Token::Continue), tag_token!(Token::Semicolon))
+        .map(|_| Stmt::Continue(None));
+
+    let while_ = preceded(
+        (tag_token!(Token::While), tag_token!(Token::ParenOpen)),
+        separated_pair(parse_expr, tag_token!(Token::ParenClose), parse_stmt.map(Box::new)),
+    )
+    .map(|(cond, body)| Stmt::While { cond, body, label: None });
+
+    let do_while_ = delimited(
+        tag_token!(Token::Do),
+        separated_pair(
+            parse_stmt.map(Box::new),
+            (tag_token!(Token::While), tag_token!(Token::ParenOpen)),
+            parse_expr,
+        ),
+        (tag_token!(Token::ParenClose), tag_token!(Token::Semicolon)),
+    )
+    .map(|(body, cond)| Stmt::DoWhile { body, cond, label: None });
+
+    let for_ = preceded(
+        (tag_token!(Token::For), tag_token!(Token::ParenOpen)),
+        (
+            alt((
+                parse_decl.map(Left), // already includes semicolon
+                terminated(opt(parse_expr).map(Right), tag_token!(Token::Semicolon)),
+            )),
+            terminated(opt(parse_expr), tag_token!(Token::Semicolon)),
+            terminated(opt(parse_expr), tag_token!(Token::ParenClose)),
+            parse_stmt.map(Box::new),
+        ),
+    )
+    .map(|(init, cond, post, body)| Stmt::For { init, cond, post, body, label: None });
+
     let null = tag_token!(Token::Semicolon).map(|_| Stmt::Null);
 
-    alt((ret, expr, if_else, compound, goto, label, null)).process::<Emit>(i)
+    alt((
+        ret, expr, if_else, compound, goto, label, break_, continue_, while_, do_while_, for_, null,
+    ))
+    .process::<Emit>(i)
 }
 
 enum BinKind {

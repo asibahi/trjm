@@ -14,6 +14,8 @@ pub(crate) enum Token {
     Int,  // doubtful
     Void, // also doubtful
     Return,
+    If,
+    Else,
 
     // Operators
     Plus,      // +

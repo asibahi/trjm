@@ -152,6 +152,8 @@ token!(
         "int" => Token::Int,
         "void" => Token::Void,
         "return" => Token::Return,
+        "if" => Token::If,
+        "else" => Token::Else,
         s => Token::Ident(s.into()),
     })
 );

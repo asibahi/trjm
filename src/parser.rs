@@ -74,9 +74,20 @@ fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
     let ret = delimited(tag_token!(Token::Return), parse_expr, tag_token!(Token::Semicolon))
         .map(Stmt::Return);
     let expr = terminated(parse_expr, tag_token!(Token::Semicolon)).map(Stmt::Expression);
+
+    let if_else = preceded(
+        tag_token!(Token::If),
+        (
+            delimited(tag_token!(Token::ParenOpen), parse_expr, tag_token!(Token::ParenClose)),
+            parse_stmt.map(Box::new),
+            opt(preceded(tag_token!(Token::Else), parse_stmt).map(Box::new)),
+        )
+            .map(|(cond, then, else_)| Stmt::If { cond, then, else_ }),
+    );
+
     let null = tag_token!(Token::Semicolon).map(|_| Stmt::Null);
 
-    alt((ret, expr, null)).process::<Emit>(i)
+    alt((ret, expr, if_else, null)).process::<Emit>(i)
 }
 
 enum BinKind {

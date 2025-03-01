@@ -2,6 +2,7 @@ use crate::{
     ast::*,
     token::{Token, Tokens},
 };
+use ecow::EcoString;
 use nom::{
     Finish, IResult, Parser,
     branch::alt,
@@ -58,11 +59,13 @@ fn parse_block_item(i: Tokens<'_>) -> IResult<Tokens<'_>, BlockItem, ParseError<
     alt((parse_decl.map(BlockItem::D), parse_stmt.map(BlockItem::S))).process::<Emit>(i)
 }
 
+fn parse_ident(i: Tokens<'_>) -> IResult<Tokens<'_>, EcoString, ParseError<'_>> {
+    tag_token!(Token::Ident(_)).map_opt(|t: Tokens<'_>| t.0[0].unwrap_ident()).process::<Emit>(i)
+}
+
 fn parse_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, Decl, ParseError<'_>> {
     let (i, _) = tag_token!(Token::Int).process::<Check>(i)?;
-    let (i, name) = tag_token!(Token::Ident(_))
-        .map_opt(|t: Tokens<'_>| t.0[0].unwrap_ident())
-        .process::<Emit>(i)?;
+    let (i, name) = parse_ident(i)?;
     let (i, init) = opt(preceded(tag_token!(Token::Equal), parse_expr)).process::<Emit>(i)?;
     let (i, _) = tag_token!(Token::Semicolon).process::<Check>(i)?;
     let ret = Decl { name, init };
@@ -85,9 +88,14 @@ fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
             .map(|(cond, then, else_)| Stmt::If { cond, then, else_ }),
     );
 
+    let goto = delimited(tag_token!(Token::GoTo), parse_ident, tag_token!(Token::Semicolon))
+        .map(Stmt::GoTo);
+    let label = (terminated(parse_ident, tag_token!(Token::Colon)), parse_stmt)
+        .map(|(n, s)| Stmt::Label(n, Box::new(s)));
+
     let null = tag_token!(Token::Semicolon).map(|_| Stmt::Null);
 
-    alt((ret, expr, if_else, null)).process::<Emit>(i)
+    alt((ret, expr, if_else, goto, label, null)).process::<Emit>(i)
 }
 
 enum BinKind {

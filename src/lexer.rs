@@ -154,6 +154,7 @@ token!(
         "return" => Token::Return,
         "if" => Token::If,
         "else" => Token::Else,
+        "goto" => Token::GoTo,
         s => Token::Ident(s.into()),
     })
 );

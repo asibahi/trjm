@@ -131,6 +131,14 @@ impl ToIr for ast::Stmt {
                 }
             }
 
+            Self::GoTo(label) => {
+                instrs.push(Instr::Jump { target: eco_format!(".Lgoto..{label}") });
+            }
+            Self::Label(label, stmt) => {
+                instrs.push(Instr::Label(eco_format!(".Lgoto..{label}")));
+                stmt.to_ir(instrs);
+            }
+
             Self::Null => {}
         }
     }

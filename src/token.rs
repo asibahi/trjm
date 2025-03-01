@@ -16,6 +16,7 @@ pub(crate) enum Token {
     Return,
     If,
     Else,
+    GoTo,
 
     // Operators
     Plus,      // +

@@ -81,9 +81,7 @@ impl ToIr for ast::Program {
 impl ToIr for ast::FuncDef {
     type Output = FuncDef;
     fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
-        for bi in &self.body.0 {
-            bi.to_ir(instrs);
-        }
+        self.body.to_ir(instrs);
 
         if !matches!(instrs.last(), Some(Instr::Return(_))) {
             instrs.push(Instr::Return(Value::Const(0)));
@@ -131,9 +129,7 @@ impl ToIr for ast::Stmt {
                 }
             }
 
-            Self::Compound(_) => {
-                todo!()
-            }
+            Self::Compound(b) => b.to_ir(instrs),
 
             Self::GoTo(label) => {
                 instrs.push(Instr::Jump { target: eco_format!(".Lgoto..{label}") });
@@ -362,6 +358,15 @@ impl ToIr for ast::BinaryOp {
             Self::BitXor => BinOp::BitXor,
             Self::LeftShift => BinOp::LeftShift,
             Self::RightShift => BinOp::RightShift,
+        }
+    }
+}
+impl ToIr for ast::Block {
+    type Output = ();
+
+    fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
+        for bi in &self.0 {
+            bi.to_ir(instrs);
         }
     }
 }

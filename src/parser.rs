@@ -44,19 +44,21 @@ fn parse_func(i: Tokens<'_>) -> IResult<Tokens<'_>, FuncDef, ParseError<'_>> {
     let (i, _) = tag_token!(Token::Void).process::<Check>(i)?;
     let (i, _) = tag_token!(Token::ParenClose).process::<Check>(i)?;
 
-    let (i, _) = tag_token!(Token::BraceOpen).process::<Check>(i)?;
-
-    let (i, body) = many(.., parse_block_item).process::<Emit>(i)?;
-
-    let (i, _) = tag_token!(Token::BraceClose).process::<Check>(i)?;
+    let (i, body) = parse_block.process::<Emit>(i)?;
 
     let func_def = FuncDef { name, body };
 
     Ok((i, func_def))
 }
 
-fn parse_block_item(i: Tokens<'_>) -> IResult<Tokens<'_>, BlockItem, ParseError<'_>> {
-    alt((parse_decl.map(BlockItem::D), parse_stmt.map(BlockItem::S))).process::<Emit>(i)
+fn parse_block(i: Tokens<'_>) -> IResult<Tokens<'_>, Block, ParseError<'_>> {
+    delimited(
+        tag_token!(Token::BraceOpen),
+        many(.., alt((parse_decl.map(BlockItem::D), parse_stmt.map(BlockItem::S)))),
+        tag_token!(Token::BraceClose),
+    )
+    .map(Block)
+    .process::<Emit>(i)
 }
 
 fn parse_ident(i: Tokens<'_>) -> IResult<Tokens<'_>, EcoString, ParseError<'_>> {
@@ -88,6 +90,8 @@ fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
             .map(|(cond, then, else_)| Stmt::If { cond, then, else_ }),
     );
 
+    let compound = parse_block.map(Stmt::Compound);
+
     let goto = delimited(tag_token!(Token::GoTo), parse_ident, tag_token!(Token::Semicolon))
         .map(Stmt::GoTo);
     let label = (terminated(parse_ident, tag_token!(Token::Colon)), parse_stmt)
@@ -95,7 +99,7 @@ fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
 
     let null = tag_token!(Token::Semicolon).map(|_| Stmt::Null);
 
-    alt((ret, expr, if_else, goto, label, null)).process::<Emit>(i)
+    alt((ret, expr, if_else, compound, goto, label, null)).process::<Emit>(i)
 }
 
 enum BinKind {

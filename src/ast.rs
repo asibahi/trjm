@@ -25,34 +25,25 @@ impl Program {
 #[derive(Debug, Clone)]
 pub struct FuncDef {
     pub name: EcoString,
-    pub body: Vec<BlockItem>,
+    pub body: Block,
 }
 impl FuncDef {
     fn resolve_variables(self, map: &mut Namespace<EcoString>) -> Option<Self> {
-        let mut acc = Vec::with_capacity(self.body.len());
+        let body = self.body.resolve_variables(map)?;
 
-        for bi in self.body {
-            let bi = bi.resolve_variables(map)?;
-            acc.push(bi);
-        }
-
-        Some(Self { name: self.name, body: acc })
+        Some(Self { name: self.name, body })
     }
 
     fn resolve_labels(self) -> Option<Self> {
+        // labels are function level
         let mut label_map = FxHashMap::default();
-        let mut acc = Vec::with_capacity(self.body.len());
-
-        for bi in self.body {
-            let bi = bi.resolve_labels(&mut label_map)?;
-            acc.push(bi);
-        }
+        let body = self.body.resolve_labels(&mut label_map)?;
 
         if label_map.values().any(|v| !(*v)) {
             return None;
         };
 
-        Some(Self { name: self.name, body: acc })
+        Some(Self { name: self.name, body })
     }
 }
 
@@ -61,6 +52,10 @@ pub enum Stmt {
     Return(Expr),
     Expression(Expr),
     If { cond: Expr, then: Box<Stmt>, else_: Option<Box<Stmt>> },
+
+    Compound(Block),
+
+    // extra credit
     GoTo(EcoString),
     Label(EcoString, Box<Stmt>),
 
@@ -88,6 +83,9 @@ impl Stmt {
                 Some(Self::Label(name, Box::new(stmt.resolve_variables(map)?)))
             }
             g @ Self::GoTo(_) => Some(g),
+
+            Self::Compound(block) => Some(Self::Compound(block.resolve_variables(map)?)),
+
             n @ Self::Null => Some(n),
         }
     }
@@ -196,6 +194,29 @@ impl Decl {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct Block(pub Vec<BlockItem>);
+impl Block {
+    fn resolve_variables(self, map: &mut Namespace<EcoString>) -> Option<Self> {
+        let mut acc = Vec::with_capacity(self.0.len());
+
+        for bi in self.0 {
+            let bi = bi.resolve_variables(map)?;
+            acc.push(bi);
+        }
+
+        Some(Self(acc))
+    }
+    fn resolve_labels(self, labels: &mut Namespace<bool>) -> Option<Self> {
+        let mut acc = Vec::with_capacity(self.0.len());
+        for bi in self.0 {
+            let bi = bi.resolve_labels(labels)?;
+            acc.push(bi);
+        }
+
+        Some(Self(acc))
+    }
+}
 #[derive(Debug, Clone)]
 pub enum BlockItem {
     S(Stmt),

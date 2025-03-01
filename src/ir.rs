@@ -81,7 +81,7 @@ impl ToIr for ast::Program {
 impl ToIr for ast::FuncDef {
     type Output = FuncDef;
     fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
-        for bi in &self.body {
+        for bi in &self.body.0 {
             bi.to_ir(instrs);
         }
 
@@ -129,6 +129,10 @@ impl ToIr for ast::Stmt {
                 } else {
                     instrs.push(Instr::Label(else_label));
                 }
+            }
+
+            Self::Compound(_) => {
+                todo!()
             }
 
             Self::GoTo(label) => {

@@ -202,7 +202,7 @@ impl Stmt {
                 Some(Self::While { body: Box::new(body.resolve_goto_labels(labels)?), cond, label })
             }
             Self::DoWhile { body, cond, label } => {
-                Some(Self::While { body: Box::new(body.resolve_goto_labels(labels)?), cond, label })
+                Some(Self::DoWhile { body: Box::new(body.resolve_goto_labels(labels)?), cond, label })
             }
             Self::For { init, cond, post, body, label } => Some(Self::For {
                 init,

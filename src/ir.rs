@@ -1,5 +1,6 @@
 use crate::{assembly, ast};
 use ecow::{EcoString, eco_format};
+use either::Either::{Left, Right};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
 #[derive(Debug, Clone)]
@@ -93,6 +94,9 @@ impl ToIr for ast::FuncDef {
 impl ToIr for ast::Stmt {
     type Output = ();
     fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
+        let brk_label = |s| eco_format!("brk.{s}");
+        let cntn_label = |s| eco_format!("cntn.{s}");
+
         match self {
             Self::Return(expr) => {
                 let dst = expr.to_ir(instrs);
@@ -141,7 +145,66 @@ impl ToIr for ast::Stmt {
 
             Self::Null => {}
             Self::Switch(..) => unimplemented!(),
-            _ => todo!(),
+
+            Self::Break(Some(label)) => {
+                instrs.push(Instr::Jump { target: brk_label(label) });
+            }
+            Self::Continue(Some(label)) => {
+                instrs.push(Instr::Jump { target: cntn_label(label) });
+            }
+            Self::DoWhile { body, cond, label: Some(label) } => {
+                let start_label = eco_format!("strt.{label}");
+
+                instrs.push(Instr::Label(start_label.clone()));
+                body.to_ir(instrs);
+
+                instrs.push(Instr::Label(cntn_label(label)));
+                let cond = cond.to_ir(instrs);
+
+                instrs.extend([
+                    Instr::JumpIfNotZero { cond, target: start_label },
+                    Instr::Label(brk_label(label)),
+                ]);
+            }
+            Self::While { cond, body, label: Some(label) } => {
+                let start_label = cntn_label(label);
+                let end_label = brk_label(label);
+                instrs.push(Instr::Label(start_label.clone()));
+
+                let cond = cond.to_ir(instrs);
+                instrs.push(Instr::JumpIfZero { cond, target: end_label.clone() });
+                body.to_ir(instrs);
+
+                instrs.extend([Instr::Jump { target: start_label }, Instr::Label(end_label)]);
+            }
+            Self::For { init, cond, post, body, label: Some(label) } => {
+                let start_label = eco_format!("strt.{label}");
+                let cntn_label = cntn_label(label);
+                let brk_label = brk_label(label);
+
+                match init {
+                    Left(decl) => decl.to_ir(instrs),
+                    Right(Some(expr)) => drop(expr.to_ir(instrs)),
+                    Right(None) => (),
+                }
+
+                instrs.push(Instr::Label(start_label.clone()));
+
+                if let Some(cond) = cond {
+                    let cond = cond.to_ir(instrs);
+                    instrs.push(Instr::JumpIfZero { cond, target: brk_label.clone() });
+                }
+
+                body.to_ir(instrs);
+
+                instrs.push(Instr::Label(cntn_label.clone()));
+                if let Some(post) = post {
+                    post.to_ir(instrs);
+                }
+
+                instrs.extend([Instr::Jump { target: start_label }, Instr::Label(brk_label)]);
+            }
+            _ => unreachable!(),
         }
     }
 }

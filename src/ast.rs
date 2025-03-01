@@ -2,7 +2,7 @@
 
 use crate::ir::{self, ToIr};
 use ecow::{EcoString, eco_format};
-use either::Either;
+use either::Either::{self, Left, Right};
 use rustc_hash::FxHashMap;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
@@ -15,13 +15,15 @@ impl Program {
         let mut buf = vec![];
         self.to_ir(&mut buf)
     }
-    pub fn resolve_namespaces(self) -> Option<Self> {
+    pub fn resolve_resolutions(self) -> Option<Self> {
         let mut var_map = FxHashMap::default();
 
-        let s1 = Self(self.0.resolve_variables(&mut var_map)?);
-        let s2 = Self(s1.0.resolve_labels()?);
+        let step_1 = Self(self.0.resolve_variables(&mut var_map)?);
+        let step_2 = Self(step_1.0.resolve_goto_labels()?);
 
-        Some(s2)
+        let step_3 = Self(step_2.0.resolve_loop_labels()?);
+
+        Some(step_3)
     }
 }
 
@@ -37,14 +39,20 @@ impl FuncDef {
         Some(Self { name: self.name, body })
     }
 
-    fn resolve_labels(self) -> Option<Self> {
+    fn resolve_goto_labels(self) -> Option<Self> {
         // labels are function level
         let mut label_map = FxHashMap::default();
-        let body = self.body.resolve_labels(&mut label_map)?;
+        let body = self.body.resolve_goto_labels(&mut label_map)?;
 
         if label_map.values().any(|v| !(*v)) {
             return None;
         };
+
+        Some(Self { name: self.name, body })
+    }
+
+    fn resolve_loop_labels(self) -> Option<Self> {
+        let body = self.body.resolve_loop_labels(None)?;
 
         Some(Self { name: self.name, body })
     }
@@ -114,38 +122,39 @@ impl Stmt {
             g @ Self::GoTo(_) => Some(g),
 
             Self::Compound(block) => Some(Self::Compound(block.resolve_variables(map)?)),
-            Self::While { .. /* cond, body, label */ } => {
-                todo!()
-                // let cond = cond.resolve_variables(map)?;
-                // let body = Box::new(body.resolve_variables(map)?);
+            Self::While { cond, body, label } => {
+                let cond = cond.resolve_variables(map)?;
+                let body = Box::new(body.resolve_variables(map)?);
 
-                // Some(Self::While { cond, body, label: label.clone() })
+                Some(Self::While { cond, body, label: label.clone() })
             }
-            Self::DoWhile { .. /* cond, body, label */ } => {
-                todo!()
-                // let cond = cond.resolve_variables(map)?;
-                // let body = Box::new(body.resolve_variables(map)?);
+            Self::DoWhile { cond, body, label } => {
+                let cond = cond.resolve_variables(map)?;
+                let body = Box::new(body.resolve_variables(map)?);
 
-                // Some(Self::DoWhile { cond, body, label: label.clone() })
+                Some(Self::DoWhile { cond, body, label: label.clone() })
             }
-            Self::For {  .. /*  init, cond, post, body, label */ } => {
-                todo!()
-                // let cond = match cond {
-                //     Some(cond) => Some(cond.resolve_variables(map)?),
-                //     None => None,
-                // };
-                // let post = match post {
-                //     Some(post) => Some(post.resolve_variables(map)?),
-                //     None => None,
-                // };
-                // let init = match init {
-                //     Left(decl) => Left(decl.resolve_variables(map)?),
-                //     Right(Some(expr)) => Right(Some(expr.resolve_variables(map)?)),
-                //     Right(None) => Right(None),
-                // };
-                // let body = Box::new(body.resolve_variables(map)?);
+            Self::For { init, cond, post, body, label } => {
+                let mut for_map =
+                    map.iter().map(|(k, (v, _))| (k.clone(), (v.clone(), false))).collect();
 
-                // Some(Self::For { init, cond, post, body, label: label.clone() })
+                let init = match init {
+                    Left(decl) => Left(decl.resolve_variables(&mut for_map)?),
+                    Right(Some(expr)) => Right(Some(expr.resolve_variables(&mut for_map)?)),
+                    Right(None) => Right(None),
+                };
+                let cond = match cond {
+                    Some(cond) => Some(cond.resolve_variables(&mut for_map)?),
+                    None => None,
+                };
+                let post = match post {
+                    Some(post) => Some(post.resolve_variables(&mut for_map)?),
+                    None => None,
+                };
+
+                let body = Box::new(body.resolve_variables(&mut for_map)?);
+
+                Some(Self::For { init, cond, post, body, label: label.clone() })
             }
 
             Self::Switch(..) => unimplemented!(),
@@ -153,7 +162,7 @@ impl Stmt {
             n @ (Self::Null | Self::Break(_) | Self::Continue(_)) => Some(n),
         }
     }
-    fn resolve_labels(self, labels: &mut Namespace<bool>) -> Option<Self> {
+    fn resolve_goto_labels(self, labels: &mut Namespace<bool>) -> Option<Self> {
         match self {
             Self::GoTo(label) => {
                 if !labels.contains_key(&label) {
@@ -169,31 +178,90 @@ impl Stmt {
                     return None;
                 }
                 labels.insert(label.clone(), true);
-                let s = s.resolve_labels(labels)?;
+                let s = s.resolve_goto_labels(labels)?;
 
                 Some(Self::Label(label, Box::new(s)))
             }
             Self::If { cond, then, else_ } => {
-                let then = Box::new(then.resolve_labels(labels)?);
+                let then = Box::new(then.resolve_goto_labels(labels)?);
                 let else_ = match else_ {
-                    Some(s) => Some(Box::new(s.resolve_labels(labels)?)),
+                    Some(s) => Some(Box::new(s.resolve_goto_labels(labels)?)),
                     None => None,
                 };
 
                 Some(Self::If { cond, then, else_ })
             }
-            Self::Compound(block) => Some(Self::Compound(block.resolve_labels(labels)?)),
+            Self::Compound(block) => Some(Self::Compound(block.resolve_goto_labels(labels)?)),
             any @ (Self::Return(_)
             | Self::Null
             | Self::Expression(_)
             | Self::Break(_)
             | Self::Continue(_)) => Some(any),
 
-            Self::While { .. } => todo!(),
-            Self::DoWhile { .. } => todo!(),
-            Self::For { .. } => todo!(),
+            Self::While { body, cond, label } => {
+                Some(Self::While { body: Box::new(body.resolve_goto_labels(labels)?), cond, label })
+            }
+            Self::DoWhile { body, cond, label } => {
+                Some(Self::While { body: Box::new(body.resolve_goto_labels(labels)?), cond, label })
+            }
+            Self::For { init, cond, post, body, label } => Some(Self::For {
+                init,
+                cond,
+                post,
+                body: Box::new(body.resolve_goto_labels(labels)?),
+                label,
+            }),
 
             Self::Switch(_) => unimplemented!(),
+        }
+    }
+
+    fn resolve_loop_labels(self, current_label: Option<EcoString>) -> Option<Stmt> {
+        static LOOP_LABEL: AtomicUsize = AtomicUsize::new(0);
+
+        match self {
+            // these two should have different logic for switch
+            Self::Break(_) => Some(Self::Break(Some(current_label?))),
+            Self::Continue(_) => Some(Self::Continue(Some(current_label?))),
+
+            Self::While { cond, body, .. } => {
+                let new_label = Some(eco_format!("while.{}", LOOP_LABEL.fetch_add(1, Relaxed)));
+                let body = Box::new(body.resolve_loop_labels(new_label.clone())?);
+
+                Some(Self::While { cond, body, label: new_label })
+            }
+            Self::DoWhile { cond, body, .. } => {
+                let new_label = Some(eco_format!("do.{}", LOOP_LABEL.fetch_add(1, Relaxed)));
+                let body = Box::new(body.resolve_loop_labels(new_label.clone())?);
+
+                Some(Self::DoWhile { cond, body, label: new_label })
+            }
+            Self::For { init, cond, post, body, .. } => {
+                let new_label = Some(eco_format!("for.{}", LOOP_LABEL.fetch_add(1, Relaxed)));
+                let body = Box::new(body.resolve_loop_labels(new_label.clone())?);
+
+                Some(Self::For { init, cond, post, body, label: new_label })
+            }
+            Self::Switch(_) => unimplemented!(),
+
+            Self::If { cond, then, else_ } => {
+                let then = Box::new(then.resolve_loop_labels(current_label.clone())?);
+                let else_ = match else_ {
+                    Some(stmt) => Some(Box::new(stmt.resolve_loop_labels(current_label)?)),
+                    None => None,
+                };
+
+                Some(Self::If { cond, then, else_ })
+            }
+            Self::Compound(block) => {
+                Some(Self::Compound(block.resolve_loop_labels(current_label)?))
+            }
+            Self::Label(label, stmt) => {
+                let stmt = Box::new(stmt.resolve_loop_labels(current_label)?);
+                Some(Self::Label(label, stmt))
+            }
+
+            Self::Return(_) | Self::Expression(_) | Self::GoTo(_) | Self::Null => Some(self),
         }
     }
 }
@@ -285,10 +353,22 @@ impl Block {
 
         Some(Self(acc))
     }
-    fn resolve_labels(self, labels: &mut Namespace<bool>) -> Option<Self> {
+    fn resolve_goto_labels(self, labels: &mut Namespace<bool>) -> Option<Self> {
         let mut acc = Vec::with_capacity(self.0.len());
         for bi in self.0 {
-            let bi = bi.resolve_labels(labels)?;
+            let bi = bi.resolve_goto_labels(labels)?;
+            acc.push(bi);
+        }
+
+        Some(Self(acc))
+    }
+
+    fn resolve_loop_labels(self, current_label: Option<EcoString>) -> Option<Self> {
+        let mut acc = Vec::with_capacity(self.0.len());
+        let current_label = current_label; // pedantic clippy
+
+        for bi in self.0 {
+            let bi = bi.resolve_loop_labels(current_label.clone())?;
             acc.push(bi);
         }
 
@@ -307,11 +387,18 @@ impl BlockItem {
             Self::D(decl) => Some(Self::D(decl.resolve_variables(map)?)),
         }
     }
-    fn resolve_labels(self, labels: &mut Namespace<bool>) -> Option<Self> {
+    fn resolve_goto_labels(self, labels: &mut Namespace<bool>) -> Option<Self> {
         match self {
-            Self::S(stmt) => Some(Self::S(stmt.resolve_labels(labels)?)),
+            Self::S(stmt) => Some(Self::S(stmt.resolve_goto_labels(labels)?)),
             d @ Self::D(_) => Some(d),
         }
+    }
+
+    fn resolve_loop_labels(self, current_label: Option<EcoString>) -> Option<Self> {
+        Some(match self {
+            Self::S(stmt) => Self::S(stmt.resolve_loop_labels(current_label)?),
+            Self::D(_) => self,
+        })
     }
 }
 

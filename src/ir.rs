@@ -144,7 +144,9 @@ impl ToIr for ast::Stmt {
             }
 
             Self::Null => {}
-            Self::Switch(..) => unimplemented!(),
+            Self::Switch { .. } => unimplemented!(),
+            Self::Case { .. } => unimplemented!(),
+            Self::Default { .. } => unimplemented!(),
 
             Self::Break(Some(label)) => {
                 instrs.push(Instr::Jump { target: brk_label(label) });

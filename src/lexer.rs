@@ -160,6 +160,9 @@ token!(
         "for" => Token::For,
         "break" => Token::Break,
         "continue" => Token::Continue,
+        "switch" => Token::Switch,
+        "case" => Token::Case,
+        "default" => Token::Default,
         s => Token::Ident(s.into()),
     })
 );

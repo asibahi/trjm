@@ -134,10 +134,25 @@ fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
     )
     .map(|(init, cond, post, body)| Stmt::For { init, cond, post, body, label: None });
 
+    let switch = preceded(
+        (tag_token!(Token::Switch), tag_token!(Token::ParenOpen)),
+        separated_pair(parse_expr, tag_token!(Token::ParenClose), parse_stmt),
+    )
+    .map(|(ctrl, body)| Stmt::Switch { ctrl, body: Box::new(body), cases: Vec::new() });
+    let case = preceded(
+        tag_token!(Token::Case),
+        separated_pair(parse_expr, tag_token!(Token::Colon), parse_stmt),
+    )
+    .map(|(cnst, body)| Stmt::Case { cnst, body: Box::new(body) });
+
+    let dflt = preceded((tag_token!(Token::Default), tag_token!(Token::Colon)), parse_stmt)
+        .map(|body| Stmt::Default { body: Box::new(body) });
+
     let null = tag_token!(Token::Semicolon).map(|_| Stmt::Null);
 
     alt((
-        ret, expr, if_else, compound, goto, label, break_, continue_, while_, do_while_, for_, null,
+        ret, expr, if_else, compound, goto, label, break_, continue_, while_, do_while_, for_,
+        switch, case, dflt, null,
     ))
     .process::<Emit>(i)
 }

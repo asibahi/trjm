@@ -22,6 +22,9 @@ pub(crate) enum Token {
     For,
     Break,
     Continue,
+    Switch,
+    Case,
+    Default,
 
     // Operators
     Plus,      // +

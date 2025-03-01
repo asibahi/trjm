@@ -95,7 +95,19 @@ pub enum Stmt {
     // extra credit
     GoTo(EcoString),
     Label(EcoString, Box<Stmt>),
-    Switch(()),
+
+    Switch {
+        ctrl: Expr,
+        body: Box<Stmt>,
+        cases: Vec<EcoString>, // somewhere to put these for now
+    },
+    Case {
+        cnst: Expr,
+        body: Box<Stmt>,
+    },
+    Default {
+        body: Box<Stmt>,
+    },
 
     Null,
 }
@@ -157,7 +169,9 @@ impl Stmt {
                 Some(Self::For { init, cond, post, body, label: label.clone() })
             }
 
-            Self::Switch(..) => unimplemented!(),
+            Self::Switch { .. } => unimplemented!(),
+            Self::Case { .. } => unimplemented!(),
+            Self::Default { .. } => unimplemented!(),
 
             n @ (Self::Null | Self::Break(_) | Self::Continue(_)) => Some(n),
         }
@@ -201,9 +215,11 @@ impl Stmt {
             Self::While { body, cond, label } => {
                 Some(Self::While { body: Box::new(body.resolve_goto_labels(labels)?), cond, label })
             }
-            Self::DoWhile { body, cond, label } => {
-                Some(Self::DoWhile { body: Box::new(body.resolve_goto_labels(labels)?), cond, label })
-            }
+            Self::DoWhile { body, cond, label } => Some(Self::DoWhile {
+                body: Box::new(body.resolve_goto_labels(labels)?),
+                cond,
+                label,
+            }),
             Self::For { init, cond, post, body, label } => Some(Self::For {
                 init,
                 cond,
@@ -212,7 +228,9 @@ impl Stmt {
                 label,
             }),
 
-            Self::Switch(_) => unimplemented!(),
+            Self::Switch { .. } => unimplemented!(),
+            Self::Case { .. } => unimplemented!(),
+            Self::Default { .. } => unimplemented!(),
         }
     }
 
@@ -242,7 +260,9 @@ impl Stmt {
 
                 Some(Self::For { init, cond, post, body, label: new_label })
             }
-            Self::Switch(_) => unimplemented!(),
+            Self::Switch { .. } => unimplemented!(),
+            Self::Case { .. } => unimplemented!(),
+            Self::Default { .. } => unimplemented!(),
 
             Self::If { cond, then, else_ } => {
                 let then = Box::new(then.resolve_loop_labels(current_label.clone())?);

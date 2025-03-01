@@ -103,8 +103,35 @@ impl ToIr for ast::Stmt {
             Self::Expression(expr) => {
                 expr.to_ir(instrs);
             }
+            Self::If { cond, then, else_ } => {
+                static IF: AtomicUsize = AtomicUsize::new(0);
+                let counter = IF.fetch_add(1, Relaxed);
+
+                let else_label = eco_format!("if.else.{}", counter);
+
+                let cond = cond.to_ir(instrs);
+                // Do I need Copy Instr here ?
+                instrs.push(Instr::JumpIfZero { cond, target: else_label.clone() });
+
+                then.to_ir(instrs);
+
+                if let Some(else_) = else_ {
+                    let end_label = eco_format!("if.end.{}", counter);
+
+                    instrs.extend([
+                        Instr::Jump { target: end_label.clone() },
+                        Instr::Label(else_label),
+                    ]);
+
+                    else_.to_ir(instrs);
+
+                    instrs.push(Instr::Label(end_label));
+                } else {
+                    instrs.push(Instr::Label(else_label));
+                }
+            }
+
             Self::Null => {}
-            Self::If { .. } => unimplemented!(),
         }
     }
 }
@@ -138,7 +165,6 @@ impl ToIr for ast::Expr {
             Self::Binary { op: op @ (ast::BinaryOp::And | ast::BinaryOp::Or), lhs, rhs } => {
                 logical_ops_instrs(instrs, *op, lhs, rhs)
             }
-
             Self::Binary { op, lhs, rhs } => {
                 static BINARY_TMP: AtomicUsize = AtomicUsize::new(0);
 
@@ -153,7 +179,6 @@ impl ToIr for ast::Expr {
                 instrs.push(Instr::Binary { op, lhs, rhs, dst: dst.clone() });
                 Value::Var(dst)
             }
-
             Self::Var(id) => Value::Var(Place(id.clone())),
             Self::Assignemnt(place, value) => {
                 let ast::Expr::Var(ref dst) = **place else {
@@ -177,7 +202,33 @@ impl ToIr for ast::Expr {
 
                 Value::Var(Place(dst.clone()))
             }
-            Self::Conditional { .. } => unimplemented!(),
+
+            Self::Conditional { cond, then, else_ } => {
+                static TERNARY: AtomicUsize = AtomicUsize::new(0);
+                let counter = TERNARY.fetch_add(1, Relaxed);
+
+                let end_label = eco_format!("ter.end.{}", counter);
+                let e2_label = eco_format!("ter.e2.{}", counter);
+                let result = Place(eco_format!("ter.tmp.{}", counter));
+
+                let cond = cond.to_ir(instrs);
+                instrs.push(Instr::JumpIfZero { cond, target: e2_label.clone() });
+
+                let v1 = then.to_ir(instrs);
+                instrs.extend([
+                    Instr::Copy { src: v1, dst: result.clone() },
+                    Instr::Jump { target: end_label.clone() },
+                    Instr::Label(e2_label),
+                ]);
+
+                let v2 = else_.to_ir(instrs);
+                instrs.extend([
+                    Instr::Copy { src: v2, dst: result.clone() },
+                    Instr::Label(end_label),
+                ]);
+
+                Value::Var(result)
+            }
         }
     }
 }

@@ -39,20 +39,26 @@ pub enum Stmt {
     Return(Expr),
     Expression(Expr),
     Null,
-    #[expect(unused)]
-    If {
-        cond: Expr,
-        then: Box<Stmt>,
-        else_: Option<Box<Stmt>>,
-    },
+    If { cond: Expr, then: Box<Stmt>, else_: Option<Box<Stmt>> },
 }
 impl Stmt {
     fn resolve_variables(self, variable_map: &mut FxHashMap<EcoString, EcoString>) -> Option<Self> {
         match self {
             Self::Return(expr) => Some(Self::Return(expr.resolve_variables(variable_map)?)),
             Self::Expression(expr) => Some(Self::Expression(expr.resolve_variables(variable_map)?)),
+            Self::If { cond, then, else_ } => {
+                let else_ = match else_ {
+                    Some(s) => Some(Box::new(s.resolve_variables(variable_map)?)),
+                    None => None,
+                };
+                Some(Self::If {
+                    cond: cond.resolve_variables(variable_map)?,
+                    then: Box::new(then.resolve_variables(variable_map)?),
+                    else_,
+                })
+            }
+
             Self::Null => Some(Self::Null),
-            Self::If { .. } => unimplemented!(),
         }
     }
 }
@@ -62,23 +68,10 @@ pub enum Expr {
     ConstInt(i32),
     Var(EcoString),
     Unary(UnaryOp, Box<Expr>),
-    Binary {
-        op: BinaryOp,
-        lhs: Box<Expr>,
-        rhs: Box<Expr>,
-    },
-    CompoundAssignment {
-        op: BinaryOp,
-        lhs: Box<Expr>,
-        rhs: Box<Expr>,
-    },
+    Binary { op: BinaryOp, lhs: Box<Expr>, rhs: Box<Expr> },
+    CompoundAssignment { op: BinaryOp, lhs: Box<Expr>, rhs: Box<Expr> },
     Assignemnt(Box<Expr>, Box<Expr>),
-    #[allow(unused)]
-    Conditional {
-        cond: Box<Expr>,
-        then: Box<Expr>,
-        else_: Box<Expr>,
-    },
+    Conditional { cond: Box<Expr>, then: Box<Expr>, else_: Box<Expr> },
 }
 impl Expr {
     fn resolve_variables(self, variable_map: &mut FxHashMap<EcoString, EcoString>) -> Option<Self> {
@@ -110,7 +103,11 @@ impl Expr {
             }),
 
             v @ Self::ConstInt(_) => Some(v),
-            Self::Conditional { .. } => unimplemented!(),
+            Self::Conditional { cond, then, else_ } => Some(Self::Conditional {
+                cond: Box::new(cond.resolve_variables(variable_map)?),
+                then: Box::new(then.resolve_variables(variable_map)?),
+                else_: Box::new(else_.resolve_variables(variable_map)?),
+            }),
         }
     }
 }

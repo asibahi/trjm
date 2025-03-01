@@ -138,7 +138,12 @@ fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
         (tag_token!(Token::Switch), tag_token!(Token::ParenOpen)),
         separated_pair(parse_expr, tag_token!(Token::ParenClose), parse_stmt),
     )
-    .map(|(ctrl, body)| Stmt::Switch { ctrl, body: Box::new(body), cases: Vec::new() });
+    .map(|(ctrl, body)| Stmt::Switch {
+        ctrl,
+        body: Box::new(body),
+        label: None,
+        cases: Vec::new(),
+    });
     let case = preceded(
         tag_token!(Token::Case),
         separated_pair(parse_expr, tag_token!(Token::Colon), parse_stmt),

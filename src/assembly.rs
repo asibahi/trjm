@@ -525,8 +525,9 @@ impl ToAsm for ir::Instr {
 impl ToAsm for ir::Value {
     type Output = Operand;
     fn to_asm(&self) -> Self::Output {
+        #[expect(clippy::cast_sign_loss)]
         match self {
-            Self::Const(i) => Operand::Imm(*i),
+            Self::Const(i) => Operand::Imm(*i as u32),
             Self::Var(place) => place.to_asm(),
         }
     }

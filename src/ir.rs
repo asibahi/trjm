@@ -26,7 +26,7 @@ pub enum Instr {
 
 #[derive(Debug, Clone)]
 pub enum Value {
-    Const(u32),
+    Const(i32),
     Var(Place),
 }
 
@@ -93,9 +93,13 @@ impl ToIr for ast::FuncDef {
 }
 impl ToIr for ast::Stmt {
     type Output = ();
+    #[expect(clippy::too_many_lines)]
     fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
         let brk_label = |s| eco_format!("brk.{s}");
         let cntn_label = |s| eco_format!("cntn.{s}");
+
+        let case_label = |s, i| eco_format!("case.{i}.{s}");
+        let dfl_label = |s| eco_format!("dflt.{s}");
 
         match self {
             Self::Return(expr) => {
@@ -144,9 +148,48 @@ impl ToIr for ast::Stmt {
             }
 
             Self::Null => {}
-            Self::Switch { .. } => unimplemented!(),
-            Self::Case { .. } => unimplemented!(),
-            Self::Default { .. } => unimplemented!(),
+
+            Self::Switch { ctrl, body, label: Some(label), cases } => {
+                static SWTCH: AtomicUsize = AtomicUsize::new(0);
+
+                let dst = Place(eco_format!("swch.tmp.{}", SWTCH.fetch_add(1, Relaxed)));
+
+                let ctrl = ctrl.to_ir(instrs);
+
+                for v in cases.iter().filter_map(|c| *c) {
+                    instrs.extend([
+                        Instr::Binary {
+                            op: BinOp::Equal,
+                            lhs: Value::Const(v),
+                            rhs: ctrl.clone(),
+                            dst: dst.clone(),
+                        },
+                        Instr::JumpIfNotZero {
+                            cond: Value::Var(dst.clone()),
+                            target: case_label(label, v),
+                        },
+                    ]);
+                }
+                if cases.contains(&None) {
+                    instrs.push(Instr::Jump { target: dfl_label(label) });
+                } else {
+                    instrs.push(Instr::Jump { target: brk_label(label) });
+                }
+
+                body.to_ir(instrs);
+                instrs.push(Instr::Label(brk_label(label)));
+            }
+            Self::Case { cnst, body, label: Some(label) } => {
+                let ast::Expr::ConstInt(value) = cnst else { unreachable!() };
+                instrs.push(Instr::Label(case_label(label, *value)));
+
+                body.to_ir(instrs);
+            }
+            Self::Default { body, label: Some(label) } => {
+                instrs.push(Instr::Label(dfl_label(label)));
+
+                body.to_ir(instrs);
+            }
 
             Self::Break(Some(label)) => {
                 instrs.push(Instr::Jump { target: brk_label(label) });
@@ -206,7 +249,7 @@ impl ToIr for ast::Stmt {
 
                 instrs.extend([Instr::Jump { target: start_label }, Instr::Label(brk_label)]);
             }
-            _ => unreachable!(),
+            any => unreachable!("{any:?}"),
         }
     }
 }
@@ -214,8 +257,7 @@ impl ToIr for ast::Expr {
     type Output = Value;
     fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
         match self {
-            #[allow(clippy::cast_sign_loss)]
-            Self::ConstInt(i) => Value::Const(*i as u32),
+            Self::ConstInt(i) => Value::Const(*i),
             Self::Unary(ast::UnaryOp::Plus, expr) => expr.to_ir(instrs),
             Self::Unary(
                 op @ (ast::UnaryOp::IncPost
@@ -376,10 +418,10 @@ fn logical_ops_instrs(
         } else {
             Instr::JumpIfZero { cond: v2, target: cond_jump.clone() }
         },
-        Instr::Copy { src: Value::Const(u32::from(!or)), dst: dst.clone() },
+        Instr::Copy { src: Value::Const(i32::from(!or)), dst: dst.clone() },
         Instr::Jump { target: end.clone() },
         Instr::Label(cond_jump),
-        Instr::Copy { src: Value::Const(u32::from(or)), dst: dst.clone() },
+        Instr::Copy { src: Value::Const(i32::from(or)), dst: dst.clone() },
         Instr::Label(end),
     ]);
 

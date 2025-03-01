@@ -74,27 +74,49 @@ enum LK {
     Loop(EcoString),
     Switch(EcoString),
     SwitchInLoop { loop_: EcoString, switch: EcoString },
+    LoopInSwitch { loop_: EcoString, switch: EcoString },
     None,
 }
 impl LK {
     fn break_label(&self) -> Option<EcoString> {
         match self {
-            LK::SwitchInLoop { switch: n, .. } | LK::Loop(n) | LK::Switch(n) => Some(n.clone()),
+            LK::Loop(n)
+            | LK::Switch(n)
+            | LK::SwitchInLoop { switch: n, .. }
+            | LK::LoopInSwitch { loop_: n, .. } => Some(n.clone()),
             LK::None => None,
         }
     }
     fn loop_label(&self) -> Option<EcoString> {
         match self {
-            LK::Loop(n) | LK::SwitchInLoop { loop_: n, .. } => Some(n.clone()),
+            LK::Loop(n) | LK::SwitchInLoop { loop_: n, .. } | LK::LoopInSwitch { loop_: n, .. } => {
+                Some(n.clone())
+            }
             LK::None | LK::Switch(_) => None,
         }
     }
-    fn switch(self, label: EcoString) -> Self {
+    fn switch_label(&self) -> Option<EcoString> {
         match self {
-            LK::SwitchInLoop { loop_, .. } | LK::Loop(loop_) => {
+            LK::Switch(n)
+            | LK::SwitchInLoop { switch: n, .. }
+            | LK::LoopInSwitch { switch: n, .. } => Some(n.clone()),
+            LK::None | LK::Loop(_) => None,
+        }
+    }
+    fn into_switch(self, label: EcoString) -> Self {
+        match self {
+            LK::SwitchInLoop { loop_, .. } | LK::LoopInSwitch { loop_, .. } | LK::Loop(loop_) => {
                 LK::SwitchInLoop { loop_, switch: label }
             }
             LK::Switch(_) | LK::None => LK::Switch(label),
+        }
+    }
+    fn into_loop(self, label: EcoString) -> Self {
+        match self {
+            LK::SwitchInLoop { switch, .. }
+            | LK::Switch(switch)
+            | LK::LoopInSwitch { switch, .. } => LK::LoopInSwitch { loop_: label, switch },
+            LK::None | LK::Loop(_) => LK::Loop(label),
         }
     }
 }
@@ -140,14 +162,16 @@ pub enum Stmt {
         ctrl: Expr,
         body: Box<Stmt>,
         label: Option<EcoString>,
-        cases: Vec<Option<i32>>, 
+        cases: Vec<Option<i32>>,
     },
     Case {
         cnst: Expr,
         body: Box<Stmt>,
+        label: Option<EcoString>,
     },
     Default {
         body: Box<Stmt>,
+        label: Option<EcoString>,
     },
 
     Null,
@@ -216,13 +240,13 @@ impl Stmt {
 
                 Some(Self::Switch { ctrl, body, label, cases })
             }
-            Self::Case { cnst, body } => {
+            Self::Case { cnst, body, label } => {
                 let body = Box::new(body.resolve_variables(map)?);
 
-                Some(Self::Case { cnst, body })
+                Some(Self::Case { cnst, body, label })
             }
-            Self::Default { body } => {
-                Some(Self::Default { body: Box::new(body.resolve_variables(map)?) })
+            Self::Default { body, label } => {
+                Some(Self::Default { body: Box::new(body.resolve_variables(map)?), label })
             }
 
             n @ (Self::Null | Self::Break(_) | Self::Continue(_)) => Some(n),
@@ -287,54 +311,57 @@ impl Stmt {
                 label,
                 cases,
             }),
-            Self::Case { cnst, body } => {
-                Some(Self::Case { cnst, body: Box::new(body.resolve_goto_labels(labels)?) })
+            Self::Case { cnst, body, label } => {
+                Some(Self::Case { cnst, body: Box::new(body.resolve_goto_labels(labels)?), label })
             }
-            Self::Default { body } => {
-                Some(Self::Default { body: Box::new(body.resolve_goto_labels(labels)?) })
+            Self::Default { body, label } => {
+                Some(Self::Default { body: Box::new(body.resolve_goto_labels(labels)?), label })
             }
         }
     }
 
     fn resolve_loop_labels(self, current_label: LK) -> Option<Stmt> {
-        static LOOP_LABEL: AtomicUsize = AtomicUsize::new(0);
-        let loop_counter = LOOP_LABEL.fetch_add(1, Relaxed);
+        static LABEL: AtomicUsize = AtomicUsize::new(0);
+        let loop_counter = LABEL.fetch_add(1, Relaxed);
 
         match self {
             Self::Break(_) => Some(Self::Break(Some(current_label.break_label()?))),
             Self::Continue(_) => Some(Self::Continue(Some(current_label.loop_label()?))),
 
             Self::While { cond, body, .. } => {
-                let new_label = LK::Loop(eco_format!("while.{}", loop_counter));
+                let new_label = current_label.into_loop(eco_format!("while.{}", loop_counter));
                 let body = Box::new(body.resolve_loop_labels(new_label.clone())?);
 
                 Some(Self::While { cond, body, label: new_label.break_label() })
             }
             Self::DoWhile { cond, body, .. } => {
-                let new_label = LK::Loop(eco_format!("do.{}", loop_counter));
+                let new_label = current_label.into_loop(eco_format!("do.{}", loop_counter));
                 let body = Box::new(body.resolve_loop_labels(new_label.clone())?);
 
                 Some(Self::DoWhile { cond, body, label: new_label.break_label() })
             }
             Self::For { init, cond, post, body, .. } => {
-                let new_label = LK::Loop(eco_format!("for.{}", loop_counter));
+                let new_label = current_label.into_loop(eco_format!("for.{}", loop_counter));
                 let body = Box::new(body.resolve_loop_labels(new_label.clone())?);
 
                 Some(Self::For { init, cond, post, body, label: new_label.break_label() })
             }
             Self::Switch { ctrl, body, cases, .. } => {
-                let new_label = current_label.switch(eco_format!("while.{}", loop_counter));
+                let new_label = current_label.into_switch(eco_format!("swch.{}", loop_counter));
 
                 let body = Box::new(body.resolve_loop_labels(new_label.clone())?);
 
                 Some(Self::Switch { ctrl, body, label: new_label.break_label(), cases })
             }
-            Self::Case { cnst, body } => {
-                Some(Self::Case { cnst, body: Box::new(body.resolve_loop_labels(current_label)?) })
-            }
-            Self::Default { body } => {
-                Some(Self::Default { body: Box::new(body.resolve_loop_labels(current_label)?) })
-            }
+            Self::Case { cnst, body, .. } => Some(Self::Case {
+                cnst,
+                body: Box::new(body.resolve_loop_labels(current_label.clone())?),
+                label: current_label.switch_label(),
+            }),
+            Self::Default { body, .. } => Some(Self::Default {
+                body: Box::new(body.resolve_loop_labels(current_label.clone())?),
+                label: current_label.switch_label(),
+            }),
 
             Self::If { cond, then, else_ } => {
                 let then = Box::new(then.resolve_loop_labels(current_label.clone())?);
@@ -394,28 +421,28 @@ impl Stmt {
 
                 Self::Switch { ctrl, body, label, cases: switch_ctx.into_iter().collect() }
             }
-            Self::Case { cnst, body } => {
+            Self::Case { cnst, body, label } => {
                 let switch_ctx = switch_ctx?;
 
                 let Expr::ConstInt(value) = cnst else {
                     return None;
                 };
-           
+
                 if !switch_ctx.insert(Some(value)) {
                     return None;
                 };
 
                 let body = Box::new(body.resolve_switch_statements(Some(switch_ctx))?);
-                Self::Case { cnst, body }
+                Self::Case { cnst, body, label }
             }
-            Self::Default { body } => {
+            Self::Default { body, label } => {
                 let switch_ctx = switch_ctx?;
                 if !switch_ctx.insert(None) {
                     return None;
                 };
 
                 let body = Box::new(body.resolve_switch_statements(Some(switch_ctx))?);
-                Self::Default { body }
+                Self::Default { body, label }
             }
 
             Self::Break(_)

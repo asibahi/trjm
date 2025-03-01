@@ -148,10 +148,10 @@ fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
         tag_token!(Token::Case),
         separated_pair(parse_expr, tag_token!(Token::Colon), parse_stmt),
     )
-    .map(|(cnst, body)| Stmt::Case { cnst, body: Box::new(body) });
+    .map(|(cnst, body)| Stmt::Case { cnst, body: Box::new(body), label: None });
 
     let dflt = preceded((tag_token!(Token::Default), tag_token!(Token::Colon)), parse_stmt)
-        .map(|body| Stmt::Default { body: Box::new(body) });
+        .map(|body| Stmt::Default { body: Box::new(body), label: None });
 
     let null = tag_token!(Token::Semicolon).map(|_| Stmt::Null);
 

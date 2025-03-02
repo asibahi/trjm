@@ -9,45 +9,65 @@ use nom::{
     branch::alt,
     bytes::take,
     combinator::{all_consuming, opt, verify},
-    multi::many,
+    multi::{many, separated_list0, separated_list1},
     sequence::{delimited, preceded, separated_pair, terminated},
 };
 use nom_language::precedence::{Assoc, Operation, binary_op, precedence, unary_op};
 
-// type ParseError<'s> = ();
-type ParseError<'s> = (Tokens<'s>, nom::error::ErrorKind);
-type Emit = nom::OutputM<nom::Emit, nom::Emit, nom::Complete>;
-type Check = nom::OutputM<nom::Check, nom::Emit, nom::Complete>;
+type ParseError<'s> = ();
+// type ParseError<'s> = (Tokens<'s>, nom::error::ErrorKind);
 
 pub fn parse(tokens: &[Token]) -> Result<Program, ParseError<'_>> {
     all_consuming(parse_program).parse_complete(Tokens(tokens)).finish().map(|t| t.1)
 }
 
 fn parse_program(i: Tokens<'_>) -> IResult<Tokens<'_>, Program, ParseError<'_>> {
-    let (i, func_def) = parse_func(i)?;
+    many(1.., parse_func_decl).map(Program).parse_complete(i)
+}
 
-    Ok((i, Program(func_def)))
+fn parse_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, Decl, ParseError<'_>> {
+    parse_var_decl.map(Decl::Var).or(parse_func_decl.map(Decl::Func)).parse_complete(i)
 }
 
 macro_rules! tag_token {
     ($token:pat) => {
         verify(take(1u8), |t: &Tokens| matches!(t.0[0], $token))
     };
+    ($token:pat, $token2:pat) => {
+        verify(take(2u8), |t: &Tokens| matches!(t.0[0..2], [$token, $token2,]))
+    };
 }
 
-fn parse_func(i: Tokens<'_>) -> IResult<Tokens<'_>, FuncDef, ParseError<'_>> {
-    let (i, _) = tag_token!(Token::Int).process::<Check>(i)?;
-    let (i, name) = tag_token!(Token::Ident(_))
-        .map_opt(|t: Tokens<'_>| t.0[0].unwrap_ident())
-        .process::<Emit>(i)?;
+fn parse_var_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, VarDecl, ParseError<'_>> {
+    delimited(
+        tag_token!(Token::Int),
+        (parse_ident, opt(preceded(tag_token!(Token::Equal), parse_expr))),
+        tag_token!(Token::Semicolon),
+    )
+    .map(|(name, init)| VarDecl { name, init })
+    .parse_complete(i)
+}
 
-    let (i, _) = tag_token!(Token::ParenOpen).process::<Check>(i)?;
-    let (i, _) = tag_token!(Token::Void).process::<Check>(i)?;
-    let (i, _) = tag_token!(Token::ParenClose).process::<Check>(i)?;
+fn parse_func_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, FuncDecl, ParseError<'_>> {
+    let (i, name) = preceded(tag_token!(Token::Int), parse_ident).parse_complete(i)?;
 
-    let (i, body) = parse_block.process::<Emit>(i)?;
+    let (i, params) = delimited(
+        tag_token!(Token::ParenOpen),
+        alt((
+            tag_token!(Token::Void).map(|_| Vec::new()),
+            separated_list1(
+                tag_token!(Token::Comma),
+                preceded(tag_token!(Token::Int), parse_ident),
+            ),
+        )),
+        tag_token!(Token::ParenClose),
+    )
+    .parse_complete(i)?;
 
-    let func_def = FuncDef { name, body };
+    let (i, body) =
+        parse_block.map(Some).or(tag_token!(Token::Semicolon).map(|_| None)).parse_complete(i)?;
+
+    let func_def = FuncDecl { name, params, body };
 
     Ok((i, func_def))
 }
@@ -55,25 +75,15 @@ fn parse_func(i: Tokens<'_>) -> IResult<Tokens<'_>, FuncDef, ParseError<'_>> {
 fn parse_block(i: Tokens<'_>) -> IResult<Tokens<'_>, Block, ParseError<'_>> {
     delimited(
         tag_token!(Token::BraceOpen),
-        many(.., alt((parse_decl.map(BlockItem::D), parse_stmt.map(BlockItem::S)))),
+        many(.., parse_decl.map(BlockItem::D).or(parse_stmt.map(BlockItem::S))),
         tag_token!(Token::BraceClose),
     )
     .map(Block)
-    .process::<Emit>(i)
+    .parse_complete(i)
 }
 
 fn parse_ident(i: Tokens<'_>) -> IResult<Tokens<'_>, EcoString, ParseError<'_>> {
-    tag_token!(Token::Ident(_)).map_opt(|t: Tokens<'_>| t.0[0].unwrap_ident()).process::<Emit>(i)
-}
-
-fn parse_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, Decl, ParseError<'_>> {
-    let (i, _) = tag_token!(Token::Int).process::<Check>(i)?;
-    let (i, name) = parse_ident(i)?;
-    let (i, init) = opt(preceded(tag_token!(Token::Equal), parse_expr)).process::<Emit>(i)?;
-    let (i, _) = tag_token!(Token::Semicolon).process::<Check>(i)?;
-    let ret = Decl { name, init };
-
-    Ok((i, ret))
+    tag_token!(Token::Ident(_)).map_opt(|t: Tokens<'_>| t.0[0].unwrap_ident()).parse_complete(i)
 }
 
 fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
@@ -95,16 +105,15 @@ fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
 
     let goto = delimited(tag_token!(Token::GoTo), parse_ident, tag_token!(Token::Semicolon))
         .map(Stmt::GoTo);
-    let label = (terminated(parse_ident, tag_token!(Token::Colon)), parse_stmt)
+    let label = terminated(parse_ident, tag_token!(Token::Colon))
+        .and(parse_stmt)
         .map(|(n, s)| Stmt::Label(n, Box::new(s)));
 
-    let break_ = terminated(tag_token!(Token::Break), tag_token!(Token::Semicolon))
-        .map(|_| Stmt::Break(None));
-    let continue_ = terminated(tag_token!(Token::Continue), tag_token!(Token::Semicolon))
-        .map(|_| Stmt::Continue(None));
+    let break_ = tag_token!(Token::Break, Token::Semicolon).map(|_| Stmt::Break(None));
+    let continue_ = tag_token!(Token::Continue, Token::Semicolon).map(|_| Stmt::Continue(None));
 
     let while_ = preceded(
-        (tag_token!(Token::While), tag_token!(Token::ParenOpen)),
+        tag_token!(Token::While, Token::ParenOpen),
         separated_pair(parse_expr, tag_token!(Token::ParenClose), parse_stmt.map(Box::new)),
     )
     .map(|(cond, body)| Stmt::While { cond, body, label: None });
@@ -113,18 +122,18 @@ fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
         tag_token!(Token::Do),
         separated_pair(
             parse_stmt.map(Box::new),
-            (tag_token!(Token::While), tag_token!(Token::ParenOpen)),
+            tag_token!(Token::While, Token::ParenOpen),
             parse_expr,
         ),
-        (tag_token!(Token::ParenClose), tag_token!(Token::Semicolon)),
+        tag_token!(Token::ParenClose, Token::Semicolon),
     )
     .map(|(body, cond)| Stmt::DoWhile { body, cond, label: None });
 
     let for_ = preceded(
-        (tag_token!(Token::For), tag_token!(Token::ParenOpen)),
+        tag_token!(Token::For, Token::ParenOpen),
         (
             alt((
-                parse_decl.map(Left), // already includes semicolon
+                parse_var_decl.map(Left), // already includes semicolon
                 terminated(opt(parse_expr).map(Right), tag_token!(Token::Semicolon)),
             )),
             terminated(opt(parse_expr), tag_token!(Token::Semicolon)),
@@ -135,7 +144,7 @@ fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
     .map(|(init, cond, post, body)| Stmt::For { init, cond, post, body, label: None });
 
     let switch = preceded(
-        (tag_token!(Token::Switch), tag_token!(Token::ParenOpen)),
+        tag_token!(Token::Switch, Token::ParenOpen),
         separated_pair(parse_expr, tag_token!(Token::ParenClose), parse_stmt),
     )
     .map(|(ctrl, body)| Stmt::Switch {
@@ -150,7 +159,7 @@ fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
     )
     .map(|(cnst, body)| Stmt::Case { cnst, body: Box::new(body), label: None });
 
-    let dflt = preceded((tag_token!(Token::Default), tag_token!(Token::Colon)), parse_stmt)
+    let dflt = preceded(tag_token!(Token::Default, Token::Colon), parse_stmt)
         .map(|body| Stmt::Default { body: Box::new(body), label: None });
 
     let null = tag_token!(Token::Semicolon).map(|_| Stmt::Null);
@@ -159,7 +168,7 @@ fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
         ret, expr, if_else, compound, goto, label, break_, continue_, while_, do_while_, for_,
         switch, case, dflt, null,
     ))
-    .process::<Emit>(i)
+    .parse_complete(i)
 }
 
 enum BinKind {
@@ -260,15 +269,21 @@ fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
         )),
         // operands or factors
         alt((
+            // function call
+            parse_ident
+                .and(delimited(
+                    tag_token!(Token::ParenOpen),
+                    separated_list0(tag_token!(Token::Comma), parse_expr),
+                    tag_token!(Token::ParenClose),
+                ))
+                .map(|(name, args)| Expr::FuncCall { name, args }),
             // const
             tag_token!(Token::NumberLiteral(_))
                 .map_opt(|t: Tokens<'_>| t.0[0].unwrap_number().map(Expr::ConstInt)),
             // group
             delimited(tag_token!(Token::ParenOpen), parse_expr, tag_token!(Token::ParenClose)),
             //variable
-            tag_token!(Token::Ident(_))
-                .map_opt(|t: Tokens<'_>| t.0[0].unwrap_ident())
-                .map(Expr::Var),
+            parse_ident.map(Expr::Var),
         )),
         // fold
         |op| -> Result<Expr, ()> {

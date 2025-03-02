@@ -12,111 +12,273 @@ use std::{
 type Namespace<T> = FxHashMap<EcoString, T>;
 
 #[derive(Debug, Clone)]
-pub struct Program(pub FuncDef);
+pub struct Program(pub Vec<FuncDecl>);
 impl Program {
     pub fn compile(&self) -> ir::Program {
         let mut buf = vec![];
         self.to_ir(&mut buf)
     }
-    pub fn resolve_resolutions(self) -> Option<Self> {
+    pub fn resolve_resolutions(mut self) -> Option<Self> {
+        // semantic analysis
+
+        let mut step_0 = {
+            for idx in 0..self.0.len() {
+                self.0[idx] = self.0[idx].clone().resolve_switch_statements()?;
+            }
+            Self(self.0)
+        };
+
         let mut var_map = FxHashMap::default();
 
-        let step_0 = Self(self.0.resolve_switch_statements()?);
-
-        let step_1 = Self(step_0.0.resolve_variables(&mut var_map)?);
-        let step_2 = Self(step_1.0.resolve_goto_labels()?);
-
-        let step_3 = Self(step_2.0.resolve_loop_labels()?);
+        let mut step_1 = {
+            for idx in 0..step_0.0.len() {
+                step_0.0[idx] = step_0.0[idx].clone().resolve_variables(&mut var_map)?;
+            }
+            Self(step_0.0)
+        };
+        let mut step_2 = {
+            for idx in 0..step_1.0.len() {
+                step_1.0[idx] = step_1.0[idx].clone().resolve_goto_labels()?;
+            }
+            Self(step_1.0)
+        };
+        let step_3 = {
+            for idx in 0..step_2.0.len() {
+                step_2.0[idx] = step_2.0[idx].clone().resolve_loop_labels()?;
+            }
+            Self(step_2.0)
+        };
 
         Some(step_3)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct FuncDef {
-    pub name: EcoString,
-    pub body: Block,
+pub enum Decl {
+    Func(FuncDecl),
+    Var(VarDecl),
 }
-impl FuncDef {
-    fn resolve_variables(self, map: &mut Namespace<(EcoString, bool)>) -> Option<Self> {
-        let body = self.body.resolve_variables(map)?;
+impl Decl {
+    fn resolve_variables(self, _map: &mut Namespace<(EcoString, bool)>) -> Option<Self> {
+        todo!()
+    }
+}
 
-        Some(Self { name: self.name, body })
+#[derive(Debug, Clone)]
+pub struct VarDecl {
+    pub name: EcoString,
+    pub init: Option<Expr>,
+}
+impl VarDecl {
+    fn resolve_variables(self, map: &mut Namespace<(EcoString, bool)>) -> Option<Self> {
+        static DECL: AtomicUsize = AtomicUsize::new(0);
+
+        if map.get(&self.name).is_some_and(|(_, from_current)| *from_current) {
+            return None;
+        }
+
+        let unique_name = eco_format!("{}.{}", self.name, DECL.fetch_add(1, Relaxed));
+
+        // shadowing happens here
+        map.insert(self.name, (unique_name.clone(), true));
+
+        let init =
+            if let Some(init) = self.init { Some(init.resolve_variables(map)?) } else { None };
+
+        Some(VarDecl { name: unique_name, init })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FuncDecl {
+    pub name: EcoString,
+    pub params: Vec<EcoString>,
+    pub body: Option<Block>,
+}
+impl FuncDecl {
+    fn resolve_variables(self, map: &mut Namespace<(EcoString, bool)>) -> Option<Self> {
+        let body = match self.body {
+            Some(body) => Some(body.resolve_variables(map)?),
+            None => None,
+        };
+
+        Some(Self { name: self.name, params: self.params, body })
     }
 
     fn resolve_goto_labels(self) -> Option<Self> {
         // labels are function level
         let mut label_map = FxHashMap::default();
-        let body = self.body.resolve_goto_labels(&mut label_map)?;
+        let body = match self.body {
+            Some(body) => Some(body.resolve_goto_labels(&mut label_map)?),
+            None => None,
+        };
 
         if label_map.values().any(|v| !(*v)) {
             return None;
         };
 
-        Some(Self { name: self.name, body })
+        Some(Self { name: self.name, body, params: self.params })
     }
 
     fn resolve_loop_labels(self) -> Option<Self> {
-        let body = self.body.resolve_loop_labels(LK::None)?;
+        let body = match self.body {
+            Some(body) => Some(body.resolve_loop_labels(LoopKind::None)?),
+            None => None,
+        };
 
-        Some(Self { name: self.name, body })
+        Some(Self { name: self.name, body, params: self.params })
     }
 
     fn resolve_switch_statements(self) -> Option<Self> {
-        let body = self.body.resolve_switch_statements(None)?;
+        let body = match self.body {
+            Some(body) => Some(body.resolve_switch_statements(None)?),
+            None => None,
+        };
 
-        Some(Self { name: self.name, body })
+        Some(Self { name: self.name, body, params: self.params })
     }
 }
 
 #[derive(Debug, Clone)]
-enum LK {
+pub enum BlockItem {
+    S(Stmt),
+    D(Decl),
+}
+impl BlockItem {
+    fn resolve_variables(self, map: &mut Namespace<(EcoString, bool)>) -> Option<Self> {
+        match self {
+            Self::S(stmt) => Some(Self::S(stmt.resolve_variables(map)?)),
+            Self::D(decl) => Some(Self::D(decl.resolve_variables(map)?)),
+        }
+    }
+    fn resolve_goto_labels(self, labels: &mut Namespace<bool>) -> Option<Self> {
+        match self {
+            Self::S(stmt) => Some(Self::S(stmt.resolve_goto_labels(labels)?)),
+            d @ Self::D(_) => Some(d),
+        }
+    }
+
+    fn resolve_loop_labels(self, current_label: LoopKind) -> Option<Self> {
+        Some(match self {
+            Self::S(stmt) => Self::S(stmt.resolve_loop_labels(current_label)?),
+            Self::D(_) => self,
+        })
+    }
+
+    fn resolve_switch_statements(self, in_switch: SwitchCtx) -> Option<Self> {
+        Some(match self {
+            BlockItem::S(stmt) => Self::S(stmt.resolve_switch_statements(in_switch)?),
+            BlockItem::D(_) => self,
+        })
+    }
+}
+
+type SwitchCtx<'s> = Option<&'s mut FxHashSet<Option<i32>>>;
+
+#[derive(Debug, Clone)]
+pub struct Block(pub Vec<BlockItem>);
+impl Block {
+    fn resolve_variables(self, map: &mut Namespace<(EcoString, bool)>) -> Option<Self> {
+        let mut block_map = map.iter().map(|(k, (v, _))| (k.clone(), (v.clone(), false))).collect();
+        let mut acc = Vec::with_capacity(self.0.len());
+
+        for bi in self.0 {
+            let bi = bi.resolve_variables(&mut block_map)?;
+            acc.push(bi);
+        }
+
+        Some(Self(acc))
+    }
+    fn resolve_goto_labels(self, labels: &mut Namespace<bool>) -> Option<Self> {
+        let mut acc = Vec::with_capacity(self.0.len());
+        for bi in self.0 {
+            let bi = bi.resolve_goto_labels(labels)?;
+            acc.push(bi);
+        }
+
+        Some(Self(acc))
+    }
+
+    fn resolve_loop_labels(self, current_label: LoopKind) -> Option<Self> {
+        let mut acc = Vec::with_capacity(self.0.len());
+        let current_label = current_label; // pedantic clippy
+
+        for bi in self.0 {
+            let bi = bi.resolve_loop_labels(current_label.clone())?;
+            acc.push(bi);
+        }
+
+        Some(Self(acc))
+    }
+
+    fn resolve_switch_statements(self, switch_ctx: SwitchCtx) -> Option<Self> {
+        let mut acc = Vec::with_capacity(self.0.len());
+        if let Some(switch_ctx) = switch_ctx {
+            for bi in self.0 {
+                let bi = bi.resolve_switch_statements(Some(switch_ctx))?;
+                acc.push(bi);
+            }
+        } else {
+            for bi in self.0 {
+                let bi = bi.resolve_switch_statements(None)?;
+                acc.push(bi);
+            }
+        }
+
+        Some(Self(acc))
+    }
+}
+
+#[derive(Debug, Clone)]
+enum LoopKind {
     Loop(EcoString),
     Switch(EcoString),
     SwitchInLoop { loop_: EcoString, switch: EcoString },
     LoopInSwitch { loop_: EcoString, switch: EcoString },
     None,
 }
-impl LK {
+impl LoopKind {
     fn break_label(&self) -> Option<EcoString> {
         match self {
-            LK::Loop(n)
-            | LK::Switch(n)
-            | LK::SwitchInLoop { switch: n, .. }
-            | LK::LoopInSwitch { loop_: n, .. } => Some(n.clone()),
-            LK::None => None,
+            LoopKind::Loop(n)
+            | LoopKind::Switch(n)
+            | LoopKind::SwitchInLoop { switch: n, .. }
+            | LoopKind::LoopInSwitch { loop_: n, .. } => Some(n.clone()),
+            LoopKind::None => None,
         }
     }
     fn loop_label(&self) -> Option<EcoString> {
         match self {
-            LK::Loop(n) | LK::SwitchInLoop { loop_: n, .. } | LK::LoopInSwitch { loop_: n, .. } => {
-                Some(n.clone())
-            }
-            LK::None | LK::Switch(_) => None,
+            LoopKind::Loop(n)
+            | LoopKind::SwitchInLoop { loop_: n, .. }
+            | LoopKind::LoopInSwitch { loop_: n, .. } => Some(n.clone()),
+            LoopKind::None | LoopKind::Switch(_) => None,
         }
     }
     fn switch_label(&self) -> Option<EcoString> {
         match self {
-            LK::Switch(n)
-            | LK::SwitchInLoop { switch: n, .. }
-            | LK::LoopInSwitch { switch: n, .. } => Some(n.clone()),
-            LK::None | LK::Loop(_) => None,
+            LoopKind::Switch(n)
+            | LoopKind::SwitchInLoop { switch: n, .. }
+            | LoopKind::LoopInSwitch { switch: n, .. } => Some(n.clone()),
+            LoopKind::None | LoopKind::Loop(_) => None,
         }
     }
     fn into_switch(self, label: EcoString) -> Self {
         match self {
-            LK::SwitchInLoop { loop_, .. } | LK::LoopInSwitch { loop_, .. } | LK::Loop(loop_) => {
-                LK::SwitchInLoop { loop_, switch: label }
-            }
-            LK::Switch(_) | LK::None => LK::Switch(label),
+            LoopKind::SwitchInLoop { loop_, .. }
+            | LoopKind::LoopInSwitch { loop_, .. }
+            | LoopKind::Loop(loop_) => LoopKind::SwitchInLoop { loop_, switch: label },
+            LoopKind::Switch(_) | LoopKind::None => LoopKind::Switch(label),
         }
     }
     fn into_loop(self, label: EcoString) -> Self {
         match self {
-            LK::SwitchInLoop { switch, .. }
-            | LK::Switch(switch)
-            | LK::LoopInSwitch { switch, .. } => LK::LoopInSwitch { loop_: label, switch },
-            LK::None | LK::Loop(_) => LK::Loop(label),
+            LoopKind::SwitchInLoop { switch, .. }
+            | LoopKind::Switch(switch)
+            | LoopKind::LoopInSwitch { switch, .. } => {
+                LoopKind::LoopInSwitch { loop_: label, switch }
+            }
+            LoopKind::None | LoopKind::Loop(_) => LoopKind::Loop(label),
         }
     }
 }
@@ -146,7 +308,7 @@ pub enum Stmt {
         label: Option<EcoString>,
     },
     For {
-        init: Either<Decl, Option<Expr>>,
+        init: Either<VarDecl, Option<Expr>>,
         cond: Option<Expr>,
         post: Option<Expr>,
 
@@ -320,7 +482,7 @@ impl Stmt {
         }
     }
 
-    fn resolve_loop_labels(self, current_label: LK) -> Option<Stmt> {
+    fn resolve_loop_labels(self, current_label: LoopKind) -> Option<Stmt> {
         static LABEL: AtomicUsize = AtomicUsize::new(0);
         let loop_counter = LABEL.fetch_add(1, Relaxed);
 
@@ -464,6 +626,7 @@ pub enum Expr {
     CompoundAssignment { op: BinaryOp, lhs: Box<Expr>, rhs: Box<Expr> },
     Assignemnt(Box<Expr>, Box<Expr>),
     Conditional { cond: Box<Expr>, then: Box<Expr>, else_: Box<Expr> },
+    FuncCall { name: EcoString, args: Vec<Expr> },
 }
 impl Expr {
     fn resolve_variables(self, map: &mut Namespace<(EcoString, bool)>) -> Option<Self> {
@@ -499,121 +662,9 @@ impl Expr {
                 then: Box::new(then.resolve_variables(map)?),
                 else_: Box::new(else_.resolve_variables(map)?),
             }),
+
+            Self::FuncCall { .. } => todo!(),
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Decl {
-    pub name: EcoString,
-    pub init: Option<Expr>,
-}
-impl Decl {
-    fn resolve_variables(self, map: &mut Namespace<(EcoString, bool)>) -> Option<Self> {
-        static DECL: AtomicUsize = AtomicUsize::new(0);
-
-        if map.get(&self.name).is_some_and(|(_, from_current)| *from_current) {
-            return None;
-        }
-
-        let unique_name = eco_format!("{}.{}", self.name, DECL.fetch_add(1, Relaxed));
-
-        // shadowing happens here
-        map.insert(self.name, (unique_name.clone(), true));
-
-        let init =
-            if let Some(init) = self.init { Some(init.resolve_variables(map)?) } else { None };
-
-        Some(Decl { name: unique_name, init })
-    }
-}
-
-type SwitchCtx<'s> = Option<&'s mut FxHashSet<Option<i32>>>;
-
-#[derive(Debug, Clone)]
-pub struct Block(pub Vec<BlockItem>);
-impl Block {
-    fn resolve_variables(self, map: &mut Namespace<(EcoString, bool)>) -> Option<Self> {
-        let mut block_map = map.iter().map(|(k, (v, _))| (k.clone(), (v.clone(), false))).collect();
-        let mut acc = Vec::with_capacity(self.0.len());
-
-        for bi in self.0 {
-            let bi = bi.resolve_variables(&mut block_map)?;
-            acc.push(bi);
-        }
-
-        Some(Self(acc))
-    }
-    fn resolve_goto_labels(self, labels: &mut Namespace<bool>) -> Option<Self> {
-        let mut acc = Vec::with_capacity(self.0.len());
-        for bi in self.0 {
-            let bi = bi.resolve_goto_labels(labels)?;
-            acc.push(bi);
-        }
-
-        Some(Self(acc))
-    }
-
-    fn resolve_loop_labels(self, current_label: LK) -> Option<Self> {
-        let mut acc = Vec::with_capacity(self.0.len());
-        let current_label = current_label; // pedantic clippy
-
-        for bi in self.0 {
-            let bi = bi.resolve_loop_labels(current_label.clone())?;
-            acc.push(bi);
-        }
-
-        Some(Self(acc))
-    }
-
-    fn resolve_switch_statements(self, switch_ctx: SwitchCtx) -> Option<Self> {
-        let mut acc = Vec::with_capacity(self.0.len());
-        if let Some(switch_ctx) = switch_ctx {
-            for bi in self.0 {
-                let bi = bi.resolve_switch_statements(Some(switch_ctx))?;
-                acc.push(bi);
-            }
-        } else {
-            for bi in self.0 {
-                let bi = bi.resolve_switch_statements(None)?;
-                acc.push(bi);
-            }
-        }
-
-        Some(Self(acc))
-    }
-}
-#[derive(Debug, Clone)]
-pub enum BlockItem {
-    S(Stmt),
-    D(Decl),
-}
-impl BlockItem {
-    fn resolve_variables(self, map: &mut Namespace<(EcoString, bool)>) -> Option<Self> {
-        match self {
-            Self::S(stmt) => Some(Self::S(stmt.resolve_variables(map)?)),
-            Self::D(decl) => Some(Self::D(decl.resolve_variables(map)?)),
-        }
-    }
-    fn resolve_goto_labels(self, labels: &mut Namespace<bool>) -> Option<Self> {
-        match self {
-            Self::S(stmt) => Some(Self::S(stmt.resolve_goto_labels(labels)?)),
-            d @ Self::D(_) => Some(d),
-        }
-    }
-
-    fn resolve_loop_labels(self, current_label: LK) -> Option<Self> {
-        Some(match self {
-            Self::S(stmt) => Self::S(stmt.resolve_loop_labels(current_label)?),
-            Self::D(_) => self,
-        })
-    }
-
-    fn resolve_switch_statements(self, in_switch: SwitchCtx) -> Option<Self> {
-        Some(match self {
-            BlockItem::S(stmt) => Self::S(stmt.resolve_switch_statements(in_switch)?),
-            BlockItem::D(_) => self,
-        })
     }
 }
 

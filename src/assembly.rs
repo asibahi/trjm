@@ -435,7 +435,8 @@ where
 impl ToAsm for ir::Program {
     type Output = Program;
     fn to_asm(&self) -> Self::Output {
-        Program(self.0.to_asm())
+        // Program(self.0.to_asm())
+        todo!()
     }
 }
 

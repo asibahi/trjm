@@ -75,20 +75,22 @@ impl ToIr for () {
 }
 impl ToIr for ast::Program {
     type Output = Program;
-    fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
-        Program(self.0.to_ir(instrs))
+    fn to_ir(&self, _instrs: &mut Vec<Instr>) -> Self::Output {
+        // Program(self.0.to_ir(instrs))
+        todo!()
     }
 }
-impl ToIr for ast::FuncDef {
+impl ToIr for ast::FuncDecl {
     type Output = FuncDef;
-    fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
-        self.body.to_ir(instrs);
+    fn to_ir(&self, _instrs: &mut Vec<Instr>) -> Self::Output {
+        todo!()
+        // self.body.to_ir(instrs);
 
-        if !matches!(instrs.last(), Some(Instr::Return(_))) {
-            instrs.push(Instr::Return(Value::Const(0)));
-        }
+        // if !matches!(instrs.last(), Some(Instr::Return(_))) {
+        //     instrs.push(Instr::Return(Value::Const(0)));
+        // }
 
-        Self::Output { name: self.name.clone(), body: std::mem::take(instrs) }
+        // Self::Output { name: self.name.clone(), body: std::mem::take(instrs) }
     }
 }
 impl ToIr for ast::Stmt {
@@ -346,6 +348,8 @@ impl ToIr for ast::Expr {
 
                 Value::Var(result)
             }
+
+            Self::FuncCall { .. } => todo!(),
         }
     }
 }
@@ -494,6 +498,13 @@ impl ToIr for ast::BlockItem {
     }
 }
 impl ToIr for ast::Decl {
+    type Output = ();
+
+    fn to_ir(&self, _instrs: &mut Vec<Instr>) -> Self::Output {
+        todo!()
+    }
+}
+impl ToIr for ast::VarDecl {
     type Output = ();
 
     fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {

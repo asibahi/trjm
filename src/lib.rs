@@ -50,7 +50,7 @@ pub fn compile(input: &PathBuf, mode: Mode) -> Result<PathBuf, u8> {
         return Err(0);
     }
 
-    let Some(prgm) = prgm.resolve_resolutions() else {
+    let Some(prgm) = prgm.semantic_analysis() else {
         eprintln!("failed semantic analysis.");
         return Err(5);
     };

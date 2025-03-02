@@ -11,6 +11,18 @@ use std::{
 
 type Namespace<T> = FxHashMap<EcoString, T>;
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct IdCtx {
+    name: EcoString,
+    in_current_scope: bool,
+    has_linkage: bool,
+}
+impl IdCtx {
+    fn new(name: EcoString, in_current_scope: bool, has_linkage: bool) -> Self {
+        Self { name, in_current_scope, has_linkage }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Program(pub Vec<FuncDecl>);
 impl Program {
@@ -18,38 +30,21 @@ impl Program {
         let mut buf = vec![];
         self.to_ir(&mut buf)
     }
-    pub fn resolve_resolutions(mut self) -> Option<Self> {
+    pub fn semantic_analysis(mut self) -> Option<Self> {
         // semantic analysis
 
-        let mut step_0 = {
-            for idx in 0..self.0.len() {
-                self.0[idx] = self.0[idx].clone().resolve_switch_statements()?;
-            }
-            Self(self.0)
-        };
+        let mut id_map = FxHashMap::default();
 
-        let mut var_map = FxHashMap::default();
+        for idx in 0..self.0.len() {
+            self.0[idx] = self.0[idx]
+                .clone()
+                .resolve_switch_statements()?
+                .resolve_identifiers(&mut id_map)?
+                .resolve_goto_labels()?
+                .resolve_loop_labels()?;
+        }
 
-        let mut step_1 = {
-            for idx in 0..step_0.0.len() {
-                step_0.0[idx] = step_0.0[idx].clone().resolve_variables(&mut var_map)?;
-            }
-            Self(step_0.0)
-        };
-        let mut step_2 = {
-            for idx in 0..step_1.0.len() {
-                step_1.0[idx] = step_1.0[idx].clone().resolve_goto_labels()?;
-            }
-            Self(step_1.0)
-        };
-        let step_3 = {
-            for idx in 0..step_2.0.len() {
-                step_2.0[idx] = step_2.0[idx].clone().resolve_loop_labels()?;
-            }
-            Self(step_2.0)
-        };
-
-        Some(step_3)
+        Some(Self(self.0))
     }
 }
 
@@ -59,8 +54,12 @@ pub enum Decl {
     Var(VarDecl),
 }
 impl Decl {
-    fn resolve_variables(self, _map: &mut Namespace<(EcoString, bool)>) -> Option<Self> {
-        todo!()
+    fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> Option<Self> {
+        Some(match self {
+            Self::Func(func) if func.body.is_none() => Self::Func(func.resolve_identifiers(map)?),
+            Self::Func(_) => return None,
+            Self::Var(var) => Self::Var(var.resolve_identifiers(map)?),
+        })
     }
 }
 
@@ -70,20 +69,20 @@ pub struct VarDecl {
     pub init: Option<Expr>,
 }
 impl VarDecl {
-    fn resolve_variables(self, map: &mut Namespace<(EcoString, bool)>) -> Option<Self> {
+    fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> Option<Self> {
         static DECL: AtomicUsize = AtomicUsize::new(0);
 
-        if map.get(&self.name).is_some_and(|(_, from_current)| *from_current) {
+        if map.get(&self.name).is_some_and(|idctx| idctx.in_current_scope) {
             return None;
         }
 
         let unique_name = eco_format!("{}.{}", self.name, DECL.fetch_add(1, Relaxed));
 
         // shadowing happens here
-        map.insert(self.name, (unique_name.clone(), true));
+        map.insert(self.name, IdCtx::new(unique_name.clone(), true, false));
 
         let init =
-            if let Some(init) = self.init { Some(init.resolve_variables(map)?) } else { None };
+            if let Some(init) = self.init { Some(init.resolve_identifiers(map)?) } else { None };
 
         Some(VarDecl { name: unique_name, init })
     }
@@ -96,13 +95,33 @@ pub struct FuncDecl {
     pub body: Option<Block>,
 }
 impl FuncDecl {
-    fn resolve_variables(self, map: &mut Namespace<(EcoString, bool)>) -> Option<Self> {
+    fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> Option<Self> {
+        if map
+            .insert(self.name.clone(), IdCtx::new(self.name.clone(), true, true))
+            .is_some_and(|id| id.in_current_scope && !id.has_linkage)
+        {
+            return None;
+        };
+
+        let mut inner_map = map
+            .iter()
+            .map(|(k, idctx)| (k.clone(), IdCtx { in_current_scope: false, ..idctx.clone() }))
+            .collect();
+
+        let mut params = Vec::with_capacity(self.params.len());
+        for param in self.params {
+            let VarDecl { name, .. } = (VarDecl { name: param.clone(), init: None })
+                .resolve_identifiers(&mut inner_map)?;
+
+            params.push(name);
+        }
+
         let body = match self.body {
-            Some(body) => Some(body.resolve_variables(map)?),
+            Some(body) => Some(body.resolve_identifiers(&mut inner_map)?),
             None => None,
         };
 
-        Some(Self { name: self.name, params: self.params, body })
+        Some(Self { name: self.name, params, body })
     }
 
     fn resolve_goto_labels(self) -> Option<Self> {
@@ -145,12 +164,13 @@ pub enum BlockItem {
     D(Decl),
 }
 impl BlockItem {
-    fn resolve_variables(self, map: &mut Namespace<(EcoString, bool)>) -> Option<Self> {
+    fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> Option<Self> {
         match self {
-            Self::S(stmt) => Some(Self::S(stmt.resolve_variables(map)?)),
-            Self::D(decl) => Some(Self::D(decl.resolve_variables(map)?)),
+            Self::S(stmt) => Some(Self::S(stmt.resolve_identifiers(map)?)),
+            Self::D(decl) => Some(Self::D(decl.resolve_identifiers(map)?)),
         }
     }
+
     fn resolve_goto_labels(self, labels: &mut Namespace<bool>) -> Option<Self> {
         match self {
             Self::S(stmt) => Some(Self::S(stmt.resolve_goto_labels(labels)?)),
@@ -178,12 +198,11 @@ type SwitchCtx<'s> = Option<&'s mut FxHashSet<Option<i32>>>;
 #[derive(Debug, Clone)]
 pub struct Block(pub Vec<BlockItem>);
 impl Block {
-    fn resolve_variables(self, map: &mut Namespace<(EcoString, bool)>) -> Option<Self> {
-        let mut block_map = map.iter().map(|(k, (v, _))| (k.clone(), (v.clone(), false))).collect();
+    fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> Option<Self> {
         let mut acc = Vec::with_capacity(self.0.len());
 
         for bi in self.0 {
-            let bi = bi.resolve_variables(&mut block_map)?;
+            let bi = bi.resolve_identifiers(map)?;
             acc.push(bi);
         }
 
@@ -339,81 +358,95 @@ pub enum Stmt {
     Null,
 }
 impl Stmt {
-    fn resolve_variables(self, map: &mut Namespace<(EcoString, bool)>) -> Option<Self> {
+    fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> Option<Self> {
         match self {
-            Self::Return(expr) => Some(Self::Return(expr.resolve_variables(map)?)),
-            Self::Expression(expr) => Some(Self::Expression(expr.resolve_variables(map)?)),
+            Self::Return(expr) => Some(Self::Return(expr.resolve_identifiers(map)?)),
+            Self::Expression(expr) => Some(Self::Expression(expr.resolve_identifiers(map)?)),
             Self::If { cond, then, else_ } => {
                 let else_ = match else_ {
-                    Some(s) => Some(Box::new(s.resolve_variables(map)?)),
+                    Some(s) => Some(Box::new(s.resolve_identifiers(map)?)),
                     None => None,
                 };
                 Some(Self::If {
-                    cond: cond.resolve_variables(map)?,
-                    then: Box::new(then.resolve_variables(map)?),
+                    cond: cond.resolve_identifiers(map)?,
+                    then: Box::new(then.resolve_identifiers(map)?),
                     else_,
                 })
             }
 
             Self::Label(name, stmt) => {
-                Some(Self::Label(name, Box::new(stmt.resolve_variables(map)?)))
+                Some(Self::Label(name, Box::new(stmt.resolve_identifiers(map)?)))
             }
             g @ Self::GoTo(_) => Some(g),
 
-            Self::Compound(block) => Some(Self::Compound(block.resolve_variables(map)?)),
+            Self::Compound(block) => {
+                let mut block_map = map
+                    .iter()
+                    .map(|(k, idctx)| {
+                        (k.clone(), IdCtx { in_current_scope: false, ..idctx.clone() })
+                    })
+                    .collect();
+
+                Some(Self::Compound(block.resolve_identifiers(&mut block_map)?))
+            }
             Self::While { cond, body, label } => {
-                let cond = cond.resolve_variables(map)?;
-                let body = Box::new(body.resolve_variables(map)?);
+                let cond = cond.resolve_identifiers(map)?;
+                let body = Box::new(body.resolve_identifiers(map)?);
 
                 Some(Self::While { cond, body, label: label.clone() })
             }
             Self::DoWhile { cond, body, label } => {
-                let cond = cond.resolve_variables(map)?;
-                let body = Box::new(body.resolve_variables(map)?);
+                let cond = cond.resolve_identifiers(map)?;
+                let body = Box::new(body.resolve_identifiers(map)?);
 
                 Some(Self::DoWhile { cond, body, label: label.clone() })
             }
             Self::For { init, cond, post, body, label } => {
-                let mut for_map =
-                    map.iter().map(|(k, (v, _))| (k.clone(), (v.clone(), false))).collect();
+                let mut for_map = map
+                    .iter()
+                    .map(|(k, idctx)| {
+                        (k.clone(), IdCtx { in_current_scope: false, ..idctx.clone() })
+                    })
+                    .collect();
 
                 let init = match init {
-                    Left(decl) => Left(decl.resolve_variables(&mut for_map)?),
-                    Right(Some(expr)) => Right(Some(expr.resolve_variables(&mut for_map)?)),
+                    Left(decl) => Left(decl.resolve_identifiers(&mut for_map)?),
+                    Right(Some(expr)) => Right(Some(expr.resolve_identifiers(&mut for_map)?)),
                     Right(None) => Right(None),
                 };
                 let cond = match cond {
-                    Some(cond) => Some(cond.resolve_variables(&mut for_map)?),
+                    Some(cond) => Some(cond.resolve_identifiers(&mut for_map)?),
                     None => None,
                 };
                 let post = match post {
-                    Some(post) => Some(post.resolve_variables(&mut for_map)?),
+                    Some(post) => Some(post.resolve_identifiers(&mut for_map)?),
                     None => None,
                 };
 
-                let body = Box::new(body.resolve_variables(&mut for_map)?);
+                let body = Box::new(body.resolve_identifiers(&mut for_map)?);
 
                 Some(Self::For { init, cond, post, body, label: label.clone() })
             }
 
             Self::Switch { ctrl, body, label, cases } => {
-                let ctrl = ctrl.resolve_variables(map)?;
-                let body = Box::new(body.resolve_variables(map)?);
+                let ctrl = ctrl.resolve_identifiers(map)?;
+                let body = Box::new(body.resolve_identifiers(map)?);
 
                 Some(Self::Switch { ctrl, body, label, cases })
             }
             Self::Case { cnst, body, label } => {
-                let body = Box::new(body.resolve_variables(map)?);
+                let body = Box::new(body.resolve_identifiers(map)?);
 
                 Some(Self::Case { cnst, body, label })
             }
             Self::Default { body, label } => {
-                Some(Self::Default { body: Box::new(body.resolve_variables(map)?), label })
+                Some(Self::Default { body: Box::new(body.resolve_identifiers(map)?), label })
             }
 
             n @ (Self::Null | Self::Break(_) | Self::Continue(_)) => Some(n),
         }
     }
+
     fn resolve_goto_labels(self, labels: &mut Namespace<bool>) -> Option<Self> {
         match self {
             Self::GoTo(label) => {
@@ -482,7 +515,7 @@ impl Stmt {
         }
     }
 
-    fn resolve_loop_labels(self, current_label: LoopKind) -> Option<Stmt> {
+    fn resolve_loop_labels(self, current_label: LoopKind) -> Option<Self> {
         static LABEL: AtomicUsize = AtomicUsize::new(0);
         let loop_counter = LABEL.fetch_add(1, Relaxed);
 
@@ -629,41 +662,51 @@ pub enum Expr {
     FuncCall { name: EcoString, args: Vec<Expr> },
 }
 impl Expr {
-    fn resolve_variables(self, map: &mut Namespace<(EcoString, bool)>) -> Option<Self> {
+    fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> Option<Self> {
         match self {
             Self::Assignemnt(left, right) if matches!(*left, Expr::Var(_)) => {
                 Some(Self::Assignemnt(
-                    Box::new(left.resolve_variables(map)?),
-                    Box::new(right.resolve_variables(map)?),
+                    Box::new(left.resolve_identifiers(map)?),
+                    Box::new(right.resolve_identifiers(map)?),
                 ))
             }
             Self::Assignemnt(_, _) => None,
 
-            // magic happens here
-            Self::Var(var) => map.get(&var).cloned().map(|t| Self::Var(t.0)),
-
-            Self::Unary(op, expr) => Some(Self::Unary(op, Box::new(expr.resolve_variables(map)?))),
+            Self::Unary(op, expr) => {
+                Some(Self::Unary(op, Box::new(expr.resolve_identifiers(map)?)))
+            }
 
             Self::Binary { op, lhs, rhs } => Some(Self::Binary {
                 op,
-                lhs: Box::new(lhs.resolve_variables(map)?),
-                rhs: Box::new(rhs.resolve_variables(map)?),
+                lhs: Box::new(lhs.resolve_identifiers(map)?),
+                rhs: Box::new(rhs.resolve_identifiers(map)?),
             }),
 
             Self::CompoundAssignment { op, lhs, rhs } => Some(Self::CompoundAssignment {
                 op,
-                lhs: Box::new(lhs.resolve_variables(map)?),
-                rhs: Box::new(rhs.resolve_variables(map)?),
+                lhs: Box::new(lhs.resolve_identifiers(map)?),
+                rhs: Box::new(rhs.resolve_identifiers(map)?),
             }),
 
             v @ Self::ConstInt(_) => Some(v),
             Self::Conditional { cond, then, else_ } => Some(Self::Conditional {
-                cond: Box::new(cond.resolve_variables(map)?),
-                then: Box::new(then.resolve_variables(map)?),
-                else_: Box::new(else_.resolve_variables(map)?),
+                cond: Box::new(cond.resolve_identifiers(map)?),
+                then: Box::new(then.resolve_identifiers(map)?),
+                else_: Box::new(else_.resolve_identifiers(map)?),
             }),
 
-            Self::FuncCall { .. } => todo!(),
+            // magic happens here
+            Self::Var(var) => map.get(&var).cloned().map(|t| Self::Var(t.name)),
+            Self::FuncCall { name, args } => {
+                let name = map.get(&name)?.clone().name;
+                let mut resolved_args = Vec::with_capacity(args.len());
+
+                for arg in args {
+                    resolved_args.push(arg.resolve_identifiers(map)?);
+                }
+
+                Some(Self::FuncCall { name, args: resolved_args })
+            }
         }
     }
 }

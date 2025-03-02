@@ -81,6 +81,7 @@ pub(crate) enum Token {
     BraceOpen,
     BraceClose,
     Semicolon,
+    Comma,
 }
 
 impl Token {

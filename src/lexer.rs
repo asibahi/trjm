@@ -62,7 +62,7 @@ pub fn lex(i: &str) -> Result<Vec<Token>, LexError<'_>> {
         question_mark,
         colon,
         //
-        alt((semicolon, paren_open, paren_close, brace_open, brace_close)),
+        alt((semicolon, comma, paren_open, paren_close, brace_open, brace_close)),
         //
         identifier,
         number,
@@ -137,6 +137,7 @@ token!(greater_equal, GreaterEqual, ">=");
 token!(greater_than, GreaterThan, ">");
 
 token!(semicolon, Semicolon, ";");
+token!(comma, Comma, ",");
 token!(paren_open, ParenOpen, "(");
 token!(paren_close, ParenClose, ")");
 token!(brace_open, BraceOpen, "{");

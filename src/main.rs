@@ -25,37 +25,32 @@ fn main() -> ExitCode {
     };
     _ = remove_file(preprocessed);
 
-    if matches!(mode, trjm::Mode::Compile) {
-        let res = assemble(&compiled);
-        _ = remove_file(&compiled);
+    let res = match mode {
+        trjm::Mode::ObjectFile => assemble(&compiled, true),
+        trjm::Mode::Executable => assemble(&compiled, false),
+        _ => return ExitCode::SUCCESS,
+    };
+    _ = remove_file(&compiled);
 
-        match res {
-            Ok(_) => ExitCode::SUCCESS,
-            Err(e) => e,
-        }
-    } else {
-        ExitCode::SUCCESS
+    match res {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => e,
     }
 }
 
 fn parse() -> Result<(trjm::Mode, PathBuf), ExitCode> {
     let mut args = Arguments::from_env();
 
-    let mode = match (
-        args.contains("--lex"),
-        args.contains("--parse"),
-        args.contains("--tacky"),
-        args.contains("--codegen"),
-        args.contains("--S"),
-        args.contains("--validate"),
-    ) {
-        (true, ..) => trjm::Mode::Lex,
-        (_, true, ..) => trjm::Mode::Parse,
-        (_, _, true, ..) => trjm::Mode::Tac,
-        (.., true, _, _) => trjm::Mode::Codegen,
-        (.., true, _) => trjm::Mode::Assembly,
-        (.., true) => trjm::Mode::Validate,
-        _ => trjm::Mode::Compile,
+    let mode = match () {
+        // mutually exclusive
+        _ if args.contains("--lex") => trjm::Mode::Lex,
+        _ if args.contains("--parse") => trjm::Mode::Parse,
+        _ if args.contains("--tacky") => trjm::Mode::Tac,
+        _ if args.contains("--codegen") => trjm::Mode::Codegen,
+        _ if args.contains("--validate") => trjm::Mode::Validate,
+        _ if args.contains("--S") => trjm::Mode::Assembly,
+        _ if args.contains("-c") => trjm::Mode::ObjectFile,
+        _ => trjm::Mode::Executable,
     };
 
     match args.free_from_fn(validate_path) {
@@ -89,10 +84,14 @@ fn preprocess(input: &PathBuf) -> Result<PathBuf, ExitCode> {
     }
 }
 
-fn assemble(input: &PathBuf) -> Result<PathBuf, ExitCode> {
-    let output = input.with_extension("");
+fn assemble(input: &PathBuf, object_file: bool) -> Result<PathBuf, ExitCode> {
+    let output = if object_file { input.with_extension("o") } else { input.with_extension("") };
 
-    let status = Command::new("gcc").arg(input).arg("-o").arg(&output).status();
+    let mut cmd = Command::new("gcc");
+    if object_file {
+        cmd.arg("-c");
+    }
+    let status = cmd.arg(input).arg("-o").arg(&output).status();
 
     if status.is_err() || status.is_ok_and(|s| !s.success()) {
         eprintln!("assembler failed");

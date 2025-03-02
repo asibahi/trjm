@@ -17,7 +17,8 @@ pub enum Mode {
     Codegen,
     Validate,
     Assembly,
-    Compile,
+    ObjectFile,
+    Executable,
 }
 
 pub fn compile(input: &PathBuf, mode: Mode) -> Result<PathBuf, u8> {

@@ -249,7 +249,7 @@ impl ToIr for ast::Stmt {
 
                 instrs.extend([Instr::Jump { target: start_label }, Instr::Label(brk_label)]);
             }
-            any => unreachable!("{any:?}"),
+            any => unreachable!("statement shouldn't exist: {any:?}"),
         }
     }
 }

@@ -73,7 +73,7 @@ fn validate_path(s: &str) -> Result<PathBuf, &'static str> {
     }
 
     let path = PathBuf::from(s);
-    if path.is_file() && path.exists() { Ok(path.clone()) } else { Err("not a file.") }
+    if path.is_file() { Ok(path.clone()) } else { Err("not a file.") }
 }
 
 fn preprocess(input: &PathBuf) -> Result<PathBuf, ExitCode> {

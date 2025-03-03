@@ -5,16 +5,17 @@ use nom::{
     AsChar, Finish, IResult, Parser,
     branch::alt,
     bytes::{tag, take_while},
-    character::{complete::i32, multispace0, satisfy},
-    combinator::{all_consuming, peek, recognize},
+    character::{
+        complete::{bin_digit1, hex_digit1, i32, oct_digit0},
+        multispace0, satisfy,
+    },
+    combinator::{all_consuming, cut, not, recognize},
     multi::many,
     sequence::{preceded, terminated},
 };
 
 type LexError<'s> = ();
 // type LexError<'s> = (&'s str, nom::ErrorKind);
-type Emit = nom::OutputM<nom::Emit, nom::Emit, nom::Complete>;
-type Check = nom::OutputM<nom::Check, nom::Emit, nom::Complete>;
 
 pub fn lex(i: &str) -> Result<Vec<Token>, LexError<'_>> {
     let tokens = alt((
@@ -64,20 +65,17 @@ pub fn lex(i: &str) -> Result<Vec<Token>, LexError<'_>> {
         //
         alt((semicolon, comma, paren_open, paren_close, brace_open, brace_close)),
         //
-        identifier,
+        keyword_or_identifier,
         number,
     ));
 
-    all_consuming(many(1.., tokens)).process::<Emit>(i.trim()).finish().map(|t| t.1)
+    all_consuming(many(1.., tokens)).parse_complete(i.trim()).finish().map(|t| t.1)
 }
 
 macro_rules! token {
     ($func:ident, $body:expr) => {
         fn $func(i: &str) -> IResult<&str, Token, LexError<'_>> {
-            let (i, token) = $body.process::<Emit>(i)?;
-            let (i, _) = multispace0().process::<Check>(i)?;
-
-            Ok((i, token))
+            terminated($body, multispace0()).parse_complete(i)
         }
     };
     ($func:ident, $token:ident, $tag:literal) => {
@@ -144,7 +142,7 @@ token!(brace_open, BraceOpen, "{");
 token!(brace_close, BraceClose, "}");
 
 token!(
-    identifier,
+    keyword_or_identifier,
     recognize(preceded(
         satisfy(|c| c == '_' || c.is_alpha()),
         take_while(|c: char| c == '_' || c.is_alphanum()),
@@ -167,7 +165,57 @@ token!(
         s => Token::Ident(s.into()),
     })
 );
+
+macro_rules! radix (
+    ($tag: expr, $parser:ident, $radix:literal) =>{
+        preceded($tag, cut($parser))
+        .map(|s: &str| i32::from_str_radix(s, $radix).unwrap_or_default())
+    }
+);
+
 token!(
     number,
-    terminated(i32, peek(satisfy(|c| c != '_' && !c.is_alpha()))).map(Token::NumberLiteral)
+    terminated(
+        alt((
+            radix!(tag("0x").or(tag("0X")), hex_digit1, 16),
+            radix!(tag("0b").or(tag("0B")), bin_digit1, 2),
+            radix!(tag("0"), oct_digit0, 8),
+            i32,
+        )),
+        not(satisfy(|c| c == '_' || c.is_alphanum())),
+    )
+    .map(Token::NumberLiteral)
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_case::test_case;
+
+    #[test_case("0x0" => 0)]
+    #[test_case("0x10" => 16)]
+    #[test_case("0" => 0)]
+    #[test_case("010" => 8)]
+    #[test_case("10" => 10)]
+    #[test_case("0b0" => 0)]
+    #[test_case("0b10" => 2)]
+    #[test_case("0b10-0xFFF" => 2)]
+    #[test_case("0b10;int" => 2)]
+    #[test_case("0x0g" => panics "illegal literal")]
+    #[test_case("_0x0" => panics "illegal literal")]
+    #[test_case("pubg" => panics "illegal literal")]
+    #[test_case("0x10g" => panics "illegal literal")]
+    #[test_case("0b" => panics "illegal literal")]
+    #[test_case("0g" => panics "illegal literal")]
+    #[test_case("0_" => panics "illegal literal")]
+    #[test_case("010b" => panics "illegal literal")]
+    #[test_case("0109" => panics "illegal literal")]
+    #[test_case("10b" => panics "illegal literal")]
+    #[test_case("10_" => panics "illegal literal")]
+    #[test_case("0b0b" => panics "illegal literal")]
+    #[test_case("0b10b" => panics "illegal literal")]
+    #[test_case("0b10_" => panics "illegal literal")]
+    fn any(i: &str) -> i32 {
+        number(i).expect("illegal literal").1.unwrap_number().unwrap()
+    }
+}

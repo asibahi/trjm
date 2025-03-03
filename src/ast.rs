@@ -33,19 +33,27 @@ impl Program {
     pub fn semantic_analysis(mut self) -> Option<Self> {
         // semantic analysis
 
-        let mut id_map = FxHashMap::default();
+        let mut id_map = Namespace::<IdCtx>::default();
+        let mut symbols = Namespace::<Type>::default();
 
         for idx in 0..self.0.len() {
             self.0[idx] = self.0[idx]
                 .clone()
                 .resolve_switch_statements()?
                 .resolve_identifiers(&mut id_map)?
+                .type_check(&mut symbols)?
                 .resolve_goto_labels()?
                 .resolve_loop_labels()?;
         }
 
         Some(Self(self.0))
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Type {
+    Int,
+    Func { arity: usize, defined: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +69,13 @@ impl Decl {
             Self::Var(var) => Self::Var(var.resolve_identifiers(map)?),
         })
     }
+
+    fn type_check(self, symbols: &mut Namespace<Type>) -> Option<Self> {
+        Some(match self {
+            Self::Func(func) => Self::Func(func.type_check(symbols)?),
+            Self::Var(var) => Self::Var(var.type_check(symbols)?),
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +84,17 @@ pub struct VarDecl {
     pub init: Option<Expr>,
 }
 impl VarDecl {
+    fn type_check(self, symbols: &mut Namespace<Type>) -> Option<Self> {
+        symbols.insert(self.name.clone(), Type::Int);
+
+        let init = match self.init {
+            Some(exp) => Some(exp.type_check(symbols)?),
+            None => None,
+        };
+
+        Some(Self { name: self.name, init })
+    }
+
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> Option<Self> {
         static DECL: AtomicUsize = AtomicUsize::new(0);
 
@@ -95,6 +121,43 @@ pub struct FuncDecl {
     pub body: Option<Block>,
 }
 impl FuncDecl {
+    fn type_check(self, symbols: &mut Namespace<Type>) -> Option<Self> {
+        let has_body = self.body.is_some();
+        let mut already_defined = false;
+
+        match symbols.get(&self.name) {
+            None => {}
+            Some(Type::Func { arity, defined }) if *arity == self.params.len() => {
+                already_defined = *defined;
+                if already_defined && has_body {
+                    eprintln!("function defined multiple times.");
+                    return None;
+                }
+            }
+            _ => {
+                eprintln!("incompatible function declarations.");
+                return None;
+            }
+        }
+
+        symbols.insert(
+            self.name.clone(),
+            Type::Func { arity: self.params.len(), defined: already_defined || has_body },
+        );
+
+        let body = if let Some(body) = self.body {
+            for param in self.params.clone() {
+                symbols.insert(param, Type::Int);
+            }
+
+            Some(body.type_check(symbols)?)
+        } else {
+            None
+        };
+
+        Some(Self { name: self.name, params: self.params, body })
+    }
+
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> Option<Self> {
         if map
             .insert(self.name.clone(), IdCtx::new(self.name.clone(), true, true))
@@ -187,8 +250,15 @@ impl BlockItem {
 
     fn resolve_switch_statements(self, in_switch: SwitchCtx) -> Option<Self> {
         Some(match self {
-            BlockItem::S(stmt) => Self::S(stmt.resolve_switch_statements(in_switch)?),
-            BlockItem::D(_) => self,
+            Self::S(stmt) => Self::S(stmt.resolve_switch_statements(in_switch)?),
+            Self::D(_) => self,
+        })
+    }
+
+    fn type_check(self, symbols: &mut Namespace<Type>) -> Option<Self> {
+        Some(match self {
+            Self::S(stmt) => Self::S(stmt.type_check(symbols)?),
+            Self::D(decl) => Self::D(decl.type_check(symbols)?),
         })
     }
 }
@@ -232,6 +302,7 @@ impl Block {
 
     fn resolve_switch_statements(self, switch_ctx: SwitchCtx) -> Option<Self> {
         let mut acc = Vec::with_capacity(self.0.len());
+
         if let Some(switch_ctx) = switch_ctx {
             for bi in self.0 {
                 let bi = bi.resolve_switch_statements(Some(switch_ctx))?;
@@ -242,6 +313,17 @@ impl Block {
                 let bi = bi.resolve_switch_statements(None)?;
                 acc.push(bi);
             }
+        }
+
+        Some(Self(acc))
+    }
+
+    fn type_check(self, symbols: &mut Namespace<Type>) -> Option<Self> {
+        let mut acc = Vec::with_capacity(self.0.len());
+
+        for bi in self.0 {
+            let bi = bi.type_check(symbols)?;
+            acc.push(bi);
         }
 
         Some(Self(acc))
@@ -648,9 +730,68 @@ impl Stmt {
             | Self::Null => self,
         })
     }
+
+    fn type_check(self, symbols: &mut Namespace<Type>) -> Option<Self> {
+        Some(match self {
+            Self::Return(expr) => Self::Return(expr.type_check(symbols)?),
+            Self::Expression(expr) => Self::Expression(expr.type_check(symbols)?),
+            Self::If { cond, then, else_ } => Self::If {
+                cond: cond.type_check(symbols)?,
+                then: Box::new(then.type_check(symbols)?),
+                else_: match else_ {
+                    Some(s) => Some(Box::new(s.type_check(symbols)?)),
+                    None => None,
+                },
+            },
+            Self::Compound(block) => Self::Compound(block.type_check(symbols)?),
+            Self::While { cond, body, label } => Self::While {
+                cond: cond.type_check(symbols)?,
+                body: Box::new(body.type_check(symbols)?),
+                label,
+            },
+            Self::DoWhile { body, cond, label } => Self::DoWhile {
+                body: Box::new(body.type_check(symbols)?),
+                cond: cond.type_check(symbols)?,
+                label,
+            },
+            Self::For { init, cond, post, body, label } => Self::For {
+                init: match init {
+                    Left(d) => Left(d.type_check(symbols)?),
+                    Right(Some(e)) => Right(Some(e.type_check(symbols)?)),
+                    Right(None) => Right(None),
+                },
+                cond: match cond {
+                    Some(e) => Some(e.type_check(symbols)?),
+                    None => None,
+                },
+                post: match post {
+                    Some(e) => Some(e.type_check(symbols)?),
+                    None => None,
+                },
+                body: Box::new(body.type_check(symbols)?),
+                label,
+            },
+            Self::Label(label, stmt) => Self::Label(label, Box::new(stmt.type_check(symbols)?)),
+            Self::Switch { ctrl, body, label, cases } => Self::Switch {
+                ctrl: ctrl.type_check(symbols)?,
+                body: Box::new(body.type_check(symbols)?),
+                label,
+                cases,
+            },
+            Self::Case { cnst, body, label } => Self::Case {
+                cnst: cnst.type_check(symbols)?,
+                body: Box::new(body.type_check(symbols)?),
+                label,
+            },
+            Self::Default { body, label } => {
+                Self::Default { body: Box::new(body.type_check(symbols)?), label }
+            }
+            Self::GoTo(_) | Self::Break(_) | Self::Continue(_) | Self::Null => self,
+        })
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     ConstInt(i32),
     Var(EcoString),
@@ -709,9 +850,67 @@ impl Expr {
             }
         }
     }
+
+    fn type_check(self, symbols: &mut Namespace<Type>) -> Option<Self> {
+        match self {
+            Expr::FuncCall { name, args } => {
+                match symbols.get(name.as_str())? {
+                    Type::Int => {
+                        eprintln!("Variable used as function name");
+                        return None;
+                    }
+                    Type::Func { arity, .. } if *arity != args.len() => {
+                        eprintln!("function called with wrong number of arguments");
+                        return None;
+                    }
+                    Type::Func { .. } => {}
+                }
+
+                for arg in args.clone() {
+                    arg.type_check(symbols);
+                }
+
+                Some(Expr::FuncCall { name, args })
+            }
+            Expr::Var(name) => {
+                if let Some(Type::Int) = symbols.get(name.as_str()) {
+                    Some(Self::Var(name))
+                } else {
+                    eprintln!("function used as variable");
+                    None
+                }
+            }
+
+            // --
+            Expr::Unary(op, expr) => Some(Self::Unary(op, Box::new(expr.type_check(symbols)?))),
+
+            Expr::Binary { op, lhs, rhs } => Some(Self::Binary {
+                op,
+                lhs: Box::new(lhs.type_check(symbols)?),
+                rhs: Box::new(rhs.type_check(symbols)?),
+            }),
+
+            Expr::Assignemnt(lhs, rhs) => Some(Self::Assignemnt(
+                Box::new(lhs.type_check(symbols)?),
+                Box::new(rhs.type_check(symbols)?),
+            )),
+
+            Expr::CompoundAssignment { op, lhs, rhs } => Some(Self::CompoundAssignment {
+                op,
+                lhs: Box::new(lhs.type_check(symbols)?),
+                rhs: Box::new(rhs.type_check(symbols)?),
+            }),
+            Expr::ConstInt(_) => Some(self),
+            Expr::Conditional { cond, then, else_ } => Some(Self::Conditional {
+                cond: Box::new(cond.type_check(symbols)?),
+                then: Box::new(then.type_check(symbols)?),
+                else_: Box::new(else_.type_check(symbols)?),
+            }),
+        }
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
     Complement,
     Negate,
@@ -727,7 +926,7 @@ pub enum UnaryOp {
     DecPost,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
     Add,
     Subtract,

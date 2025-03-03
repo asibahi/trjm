@@ -520,6 +520,7 @@ impl ToAsm for ir::Instr {
                 vec![Instr::Cmp(Operand::Imm(0), cond.to_asm()), Instr::JmpCC(NE, target.clone())]
             }
             Self::Label(name) => vec![Instr::Label(name.clone())],
+            Self::FuncCall { .. } => todo!(),
         }
     }
 }

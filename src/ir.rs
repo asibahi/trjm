@@ -4,11 +4,12 @@ use either::Either::{Left, Right};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
 #[derive(Debug, Clone)]
-pub struct Program(pub FuncDef);
+pub struct Program(pub Vec<FuncDef>);
 
 #[derive(Debug, Clone)]
 pub struct FuncDef {
     pub name: EcoString,
+    pub params: Vec<EcoString>,
     pub body: Vec<Instr>,
 }
 
@@ -22,6 +23,7 @@ pub enum Instr {
     JumpIfZero { cond: Value, target: EcoString },
     JumpIfNotZero { cond: Value, target: EcoString },
     Label(EcoString),
+    FuncCall { name: EcoString, args: Vec<Value>, dst: Place },
 }
 
 #[derive(Debug, Clone)]
@@ -75,22 +77,25 @@ impl ToIr for () {
 }
 impl ToIr for ast::Program {
     type Output = Program;
-    fn to_ir(&self, _instrs: &mut Vec<Instr>) -> Self::Output {
-        // Program(self.0.to_ir(instrs))
-        todo!()
+    fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
+        Program(self.0.iter().filter_map(|fd| fd.body.as_ref().map(|_| fd.to_ir(instrs))).collect())
     }
 }
 impl ToIr for ast::FuncDecl {
     type Output = FuncDef;
-    fn to_ir(&self, _instrs: &mut Vec<Instr>) -> Self::Output {
-        todo!()
-        // self.body.to_ir(instrs);
+    fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
+        let Some(ref body) = self.body else { unreachable!() };
+        body.to_ir(instrs);
 
-        // if !matches!(instrs.last(), Some(Instr::Return(_))) {
-        //     instrs.push(Instr::Return(Value::Const(0)));
-        // }
+        if !matches!(instrs.last(), Some(Instr::Return(_))) {
+            instrs.push(Instr::Return(Value::Const(0)));
+        }
 
-        // Self::Output { name: self.name.clone(), body: std::mem::take(instrs) }
+        FuncDef {
+            name: self.name.clone(),
+            params: self.params.clone(),
+            body: std::mem::take(instrs),
+        }
     }
 }
 impl ToIr for ast::Stmt {
@@ -349,7 +354,17 @@ impl ToIr for ast::Expr {
                 Value::Var(result)
             }
 
-            Self::FuncCall { .. } => todo!(),
+            Self::FuncCall { name, args } => {
+                static COUNTER: AtomicUsize = AtomicUsize::new(0);
+                let dst = eco_format!("fcall.tmp.{}", COUNTER.fetch_add(1, Relaxed));
+                let dst = Place(dst);
+
+                let vals = args.iter().map(|arg| arg.to_ir(instrs)).collect();
+
+                instrs.push(Instr::FuncCall { name: name.clone(), args: vals, dst: dst.clone() });
+
+                Value::Var(dst)
+            }
         }
     }
 }
@@ -500,8 +515,14 @@ impl ToIr for ast::BlockItem {
 impl ToIr for ast::Decl {
     type Output = ();
 
-    fn to_ir(&self, _instrs: &mut Vec<Instr>) -> Self::Output {
-        todo!()
+    fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
+        match self {
+            Self::Func(func @ ast::FuncDecl { body: Some(_), .. }) => {
+                func.to_ir(instrs);
+            }
+            Self::Func(_) => {}
+            Self::Var(var) => var.to_ir(instrs),
+        };
     }
 }
 impl ToIr for ast::VarDecl {

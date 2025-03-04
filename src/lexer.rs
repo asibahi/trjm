@@ -162,6 +162,8 @@ token!(
         "switch" => Token::Switch,
         "case" => Token::Case,
         "default" => Token::Default,
+        "static" => Token::Static,
+        "extern" => Token::Extern,
         s => Token::Ident(s.into()),
     })
 );

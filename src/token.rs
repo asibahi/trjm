@@ -25,6 +25,8 @@ pub(crate) enum Token {
     Switch,
     Case,
     Default,
+    Static,
+    Extern,
 
     // Operators
     Plus,      // +

@@ -22,14 +22,20 @@ impl IdCtx {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct TypeCtx {
-    type_: Type,
-    attr: Attributes,
+pub struct TypeCtx {
+    pub type_: Type,
+    pub attr: Attributes,
 }
 
 #[derive(Debug, Clone)]
-pub struct Program(pub Vec<Decl>);
+pub struct Program {
+    pub decls: Vec<Decl>,
+    pub symbols: Namespace<TypeCtx>,
+}
 impl Program {
+    pub fn new(decls: Vec<Decl>) -> Self {
+        Self { decls, symbols: Namespace::default() }
+    }
     pub fn compile(&self) -> ir::Program {
         let mut buf = vec![];
         self.to_ir(&mut buf)
@@ -38,19 +44,18 @@ impl Program {
         // semantic analysis
 
         let mut id_map = Namespace::<IdCtx>::default();
-        let mut symbols = Namespace::<TypeCtx>::default();
 
-        for idx in 0..self.0.len() {
-            self.0[idx] = self.0[idx]
+        for idx in 0..self.decls.len() {
+            self.decls[idx] = self.decls[idx]
                 .clone()
                 .resolve_switch_statements()?
                 .resolve_identifiers(Scope::File, &mut id_map)?
-                .type_check(Scope::File, &mut symbols)?
+                .type_check(Scope::File, &mut self.symbols)?
                 .resolve_goto_labels()?
                 .resolve_loop_labels()?;
         }
 
-        Ok(Self(self.0))
+        Ok(Self { decls: self.decls, symbols: self.symbols })
     }
 }
 

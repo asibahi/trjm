@@ -22,7 +22,7 @@ pub fn parse(tokens: &[Token]) -> Result<Program, ParseError<'_>> {
 }
 
 fn parse_program(i: Tokens<'_>) -> IResult<Tokens<'_>, Program, ParseError<'_>> {
-    many(1.., parse_decl).map(Program).parse_complete(i)
+    many(1.., parse_decl).map(Program::new).parse_complete(i)
 }
 
 fn parse_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, Decl, ParseError<'_>> {

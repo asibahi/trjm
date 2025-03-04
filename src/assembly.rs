@@ -473,19 +473,21 @@ impl ToAsm for ir::Program {
     }
 }
 
-impl ToAsm for ir::FuncDef {
+impl ToAsm for ir::TopLevel {
     type Output = FuncDef;
     fn to_asm(&self) -> Self::Output {
-        let instrs = ARG_REGISTERS
-            .into_iter()
-            .map(|r| Reg(r, 4))
-            .chain((16..).step_by(8).map(Stack))
-            .zip(self.params.clone())
-            .map(|(src, param)| Instr::Mov(src, Pseudo(param)))
-            .chain(self.body.iter().flat_map(ToAsm::to_asm))
-            .collect();
+        // let instrs = ARG_REGISTERS
+        //     .into_iter()
+        //     .map(|r| Reg(r, 4))
+        //     .chain((16..).step_by(8).map(Stack))
+        //     .zip(self.params.clone())
+        //     .map(|(src, param)| Instr::Mov(src, Pseudo(param)))
+        //     .chain(self.body.iter().flat_map(ToAsm::to_asm))
+        //     .collect();
 
-        FuncDef { name: self.name.clone(), instrs, stack_size: 0 }
+        // FuncDef { name: self.name.clone(), instrs, stack_size: 0 }
+
+        todo!()
     }
 }
 

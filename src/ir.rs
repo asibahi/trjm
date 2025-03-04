@@ -4,13 +4,12 @@ use either::Either::{Left, Right};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
 #[derive(Debug, Clone)]
-pub struct Program(pub Vec<FuncDef>);
+pub struct Program(pub Vec<TopLevel>);
 
 #[derive(Debug, Clone)]
-pub struct FuncDef {
-    pub name: EcoString,
-    pub params: Vec<EcoString>,
-    pub body: Vec<Instr>,
+pub enum TopLevel {
+    Function { name: EcoString, global: bool, params: Vec<EcoString>, body: Vec<Instr> },
+    StaticVar { name: EcoString, global: bool, init: i32 },
 }
 
 #[derive(Debug, Clone)]
@@ -78,20 +77,38 @@ impl ToIr for () {
 impl ToIr for ast::Program {
     type Output = Program;
     fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
-        Program(
-            self.0
-                .iter()
-                .filter_map(|fd| {
-                    // todo fix
-                    let ast::Decl::Func(fd) = fd else { return None };
-                    fd.body.as_ref().map(|_| fd.to_ir(instrs))
-                })
-                .collect(),
-        )
+        //
+        // traverse AST
+        let mut top_level = self
+            .decls
+            .iter()
+            .filter_map(|decl| -> Option<TopLevel> {
+                match decl {
+                    ast::Decl::Func(fun) => fun.body.as_ref().map(|_| fun.to_ir(instrs)),
+                    ast::Decl::Var(_) => None,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // traverse symbol table
+        top_level.extend(self.symbols.iter().filter_map(|(name, type_ctx)| match type_ctx.attr {
+            ast::Attributes::Static { init, global } => match init {
+                ast::InitValue::Tentative => {
+                    Some(TopLevel::StaticVar { name: name.clone(), global, init: 0 })
+                }
+                ast::InitValue::Initial(i) => {
+                    Some(TopLevel::StaticVar { name: name.clone(), global, init: i })
+                }
+                ast::InitValue::None => None,
+            },
+            _ => None,
+        }));
+
+        Program(top_level)
     }
 }
 impl ToIr for ast::FuncDecl {
-    type Output = FuncDef;
+    type Output = TopLevel;
     fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
         let Some(ref body) = self.body else { unreachable!() };
         body.to_ir(instrs);
@@ -100,10 +117,11 @@ impl ToIr for ast::FuncDecl {
             instrs.push(Instr::Return(Value::Const(0)));
         }
 
-        FuncDef {
+        TopLevel::Function {
             name: self.name.clone(),
             params: self.params.clone(),
             body: std::mem::take(instrs),
+            global: true,
         }
     }
 }

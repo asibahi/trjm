@@ -1,13 +1,13 @@
 use std::iter::{Cloned, Enumerate};
 
-use ecow::EcoString;
+use ecow::EcoString as Ecow;
 use nom::Input;
 
 #[warn(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Token {
     // Stuff
-    Ident(EcoString),
+    Ident(Ecow),
     NumberLiteral(i32),
 
     // Keywords
@@ -87,7 +87,7 @@ pub(crate) enum Token {
 }
 
 impl Token {
-    pub fn unwrap_ident(&self) -> Option<EcoString> {
+    pub fn unwrap_ident(&self) -> Option<Ecow> {
         if let Token::Ident(s) = self { Some(s.clone()) } else { None }
     }
 

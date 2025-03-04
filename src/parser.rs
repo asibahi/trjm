@@ -2,7 +2,7 @@ use crate::{
     ast::*,
     token::{Token, Tokens},
 };
-use ecow::EcoString;
+use ecow::EcoString as Ecow;
 use either::Either::{Left, Right};
 use nom::{
     Finish, IResult, Parser,
@@ -106,7 +106,7 @@ fn parse_block(i: Tokens<'_>) -> IResult<Tokens<'_>, Block, ParseError<'_>> {
     .parse_complete(i)
 }
 
-fn parse_ident(i: Tokens<'_>) -> IResult<Tokens<'_>, EcoString, ParseError<'_>> {
+fn parse_ident(i: Tokens<'_>) -> IResult<Tokens<'_>, Ecow, ParseError<'_>> {
     tag_token!(Token::Ident(_)).map_opt(|t: Tokens<'_>| t.0[0].unwrap_ident()).parse_complete(i)
 }
 

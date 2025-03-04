@@ -1,15 +1,21 @@
-use crate::{assembly, ast};
-use ecow::{EcoString, eco_format};
+use crate::{
+    assembly,
+    ast::{self, Namespace, StorageClass, TypeCtx},
+};
+use ecow::{EcoString as Ecow, eco_format};
 use either::Either::{Left, Right};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
 #[derive(Debug, Clone)]
-pub struct Program(pub Vec<TopLevel>);
+pub struct Program {
+    pub top_level: Vec<TopLevel>,
+    pub symbols: Namespace<TypeCtx>,
+}
 
 #[derive(Debug, Clone)]
 pub enum TopLevel {
-    Function { name: EcoString, global: bool, params: Vec<EcoString>, body: Vec<Instr> },
-    StaticVar { name: EcoString, global: bool, init: i32 },
+    Function { name: Ecow, global: bool, params: Vec<Ecow>, body: Vec<Instr> },
+    StaticVar { name: Ecow, global: bool, init: i32 },
 }
 
 #[derive(Debug, Clone)]
@@ -18,11 +24,11 @@ pub enum Instr {
     Unary { op: UnOp, src: Value, dst: Place },
     Binary { op: BinOp, lhs: Value, rhs: Value, dst: Place },
     Copy { src: Value, dst: Place },
-    Jump { target: EcoString },
-    JumpIfZero { cond: Value, target: EcoString },
-    JumpIfNotZero { cond: Value, target: EcoString },
-    Label(EcoString),
-    FuncCall { name: EcoString, args: Vec<Value>, dst: Place },
+    Jump { target: Ecow },
+    JumpIfZero { cond: Value, target: Ecow },
+    JumpIfNotZero { cond: Value, target: Ecow },
+    Label(Ecow),
+    FuncCall { name: Ecow, args: Vec<Value>, dst: Place },
 }
 
 #[derive(Debug, Clone)]
@@ -32,7 +38,7 @@ pub enum Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct Place(pub EcoString);
+pub struct Place(pub Ecow);
 
 #[derive(Debug, Clone, Copy)]
 pub enum UnOp {
@@ -104,7 +110,7 @@ impl ToIr for ast::Program {
             _ => None,
         }));
 
-        Program(top_level)
+        Program { top_level, symbols: self.symbols.clone() }
     }
 }
 impl ToIr for ast::FuncDecl {
@@ -121,7 +127,7 @@ impl ToIr for ast::FuncDecl {
             name: self.name.clone(),
             params: self.params.clone(),
             body: std::mem::take(instrs),
-            global: true,
+            global: self.sc == StorageClass::Extern,
         }
     }
 }

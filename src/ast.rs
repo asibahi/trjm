@@ -1,5 +1,5 @@
 use crate::ir::{self, ToIr};
-use ecow::{EcoString, eco_format};
+use ecow::{EcoString as Ecow, eco_format};
 use either::Either::{self, Left, Right};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::{
@@ -7,16 +7,16 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering::Relaxed},
 };
 
-type Namespace<T> = FxHashMap<EcoString, T>;
+pub type Namespace<T> = FxHashMap<Ecow, T>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct IdCtx {
-    name: EcoString,
+    name: Ecow,
     in_current_scope: bool,
     has_linkage: bool,
 }
 impl IdCtx {
-    fn new(name: EcoString, in_current_scope: bool, has_linkage: bool) -> Self {
+    fn new(name: Ecow, in_current_scope: bool, has_linkage: bool) -> Self {
         Self { name, in_current_scope, has_linkage }
     }
 }
@@ -159,7 +159,7 @@ impl Decl {
 
 #[derive(Debug, Clone)]
 pub struct VarDecl {
-    pub name: EcoString,
+    pub name: Ecow,
     pub init: Option<Expr>,
     pub sc: StorageClass,
 }
@@ -214,9 +214,7 @@ impl VarDecl {
 
         Ok(self)
     }
-    fn type_check_block(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
-        let mut init = self.init.clone();
-
+    fn type_check_block(mut self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
         match self.sc {
             StorageClass::Extern if self.init.is_some() => {
                 anyhow::bail!("init on local extern variable");
@@ -234,7 +232,7 @@ impl VarDecl {
                 Entry::Occupied(_) => {}
             },
             StorageClass::Static => {
-                let init_value = match self.init {
+                let init_value = match self.init.take() {
                     Some(Expr::ConstInt(i)) => InitValue::Initial(i),
                     None => InitValue::Initial(0),
                     _ => {
@@ -255,14 +253,15 @@ impl VarDecl {
                     self.name.clone(),
                     TypeCtx { type_: Type::Int, attr: Attributes::Local },
                 );
-                init = match self.init {
+
+                self.init = match self.init {
                     Some(v) => Some(v.type_check(symbols)?),
                     None => None,
                 };
             }
         }
 
-        Ok(Self { name: self.name, init, sc: self.sc })
+        Ok(Self { name: self.name, init: self.init, sc: self.sc })
     }
 
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {
@@ -301,8 +300,8 @@ impl VarDecl {
 
 #[derive(Debug, Clone)]
 pub struct FuncDecl {
-    pub name: EcoString,
-    pub params: Vec<EcoString>,
+    pub name: Ecow,
+    pub params: Vec<Ecow>,
     pub body: Option<Block>,
     pub sc: StorageClass,
 }
@@ -311,9 +310,6 @@ impl FuncDecl {
         let has_body = self.body.is_some();
         let mut already_defined = false;
         let mut global = self.sc != StorageClass::Static;
-
-        dbg!(&self);
-        dbg!(&symbols);
 
         match symbols.get(&self.name) {
             None => {}
@@ -357,7 +353,12 @@ impl FuncDecl {
             None
         };
 
-        Ok(Self { name: self.name, params: self.params, body, sc: self.sc })
+        Ok(Self {
+            name: self.name,
+            params: self.params,
+            body,
+            sc: if global { StorageClass::Extern } else { StorageClass::Static },
+        })
     }
 
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {
@@ -440,7 +441,7 @@ impl BlockItem {
     fn resolve_goto_labels(
         self,
         labels: &mut Namespace<bool>,
-        func_name: EcoString,
+        func_name: Ecow,
     ) -> anyhow::Result<Self> {
         match self {
             Self::S(stmt) => Ok(Self::S(stmt.resolve_goto_labels(labels, func_name)?)),
@@ -488,7 +489,7 @@ impl Block {
     fn resolve_goto_labels(
         self,
         labels: &mut Namespace<bool>,
-        func_name: EcoString,
+        func_name: Ecow,
     ) -> anyhow::Result<Self> {
         let mut acc = Vec::with_capacity(self.0.len());
         for bi in self.0 {
@@ -543,14 +544,14 @@ impl Block {
 
 #[derive(Debug, Clone)]
 enum LoopKind {
-    Loop(EcoString),
-    Switch(EcoString),
-    SwitchInLoop { loop_: EcoString, switch: EcoString },
-    LoopInSwitch { loop_: EcoString, switch: EcoString },
+    Loop(Ecow),
+    Switch(Ecow),
+    SwitchInLoop { loop_: Ecow, switch: Ecow },
+    LoopInSwitch { loop_: Ecow, switch: Ecow },
     None,
 }
 impl LoopKind {
-    fn break_label(&self) -> Option<EcoString> {
+    fn break_label(&self) -> Option<Ecow> {
         match self {
             LoopKind::Loop(n)
             | LoopKind::Switch(n)
@@ -559,7 +560,7 @@ impl LoopKind {
             LoopKind::None => None,
         }
     }
-    fn loop_label(&self) -> Option<EcoString> {
+    fn loop_label(&self) -> Option<Ecow> {
         match self {
             LoopKind::Loop(n)
             | LoopKind::SwitchInLoop { loop_: n, .. }
@@ -567,7 +568,7 @@ impl LoopKind {
             LoopKind::None | LoopKind::Switch(_) => None,
         }
     }
-    fn switch_label(&self) -> Option<EcoString> {
+    fn switch_label(&self) -> Option<Ecow> {
         match self {
             LoopKind::Switch(n)
             | LoopKind::SwitchInLoop { switch: n, .. }
@@ -575,7 +576,7 @@ impl LoopKind {
             LoopKind::None | LoopKind::Loop(_) => None,
         }
     }
-    fn into_switch(self, label: EcoString) -> Self {
+    fn into_switch(self, label: Ecow) -> Self {
         match self {
             LoopKind::SwitchInLoop { loop_, .. }
             | LoopKind::LoopInSwitch { loop_, .. }
@@ -583,7 +584,7 @@ impl LoopKind {
             LoopKind::Switch(_) | LoopKind::None => LoopKind::Switch(label),
         }
     }
-    fn into_loop(self, label: EcoString) -> Self {
+    fn into_loop(self, label: Ecow) -> Self {
         match self {
             LoopKind::SwitchInLoop { switch, .. }
             | LoopKind::Switch(switch)
@@ -607,17 +608,17 @@ pub enum Stmt {
 
     Compound(Block),
 
-    Break(Option<EcoString>),
-    Continue(Option<EcoString>),
+    Break(Option<Ecow>),
+    Continue(Option<Ecow>),
     While {
         cond: Expr,
         body: Box<Stmt>,
-        label: Option<EcoString>,
+        label: Option<Ecow>,
     },
     DoWhile {
         body: Box<Stmt>,
         cond: Expr,
-        label: Option<EcoString>,
+        label: Option<Ecow>,
     },
     For {
         init: Either<VarDecl, Option<Expr>>,
@@ -625,27 +626,27 @@ pub enum Stmt {
         post: Option<Expr>,
 
         body: Box<Stmt>,
-        label: Option<EcoString>,
+        label: Option<Ecow>,
     },
 
     // extra credit
-    GoTo(EcoString),
-    Label(EcoString, Box<Stmt>),
+    GoTo(Ecow),
+    Label(Ecow, Box<Stmt>),
 
     Switch {
         ctrl: Expr,
         body: Box<Stmt>,
-        label: Option<EcoString>,
+        label: Option<Ecow>,
         cases: Vec<Option<i32>>,
     },
     Case {
         cnst: Expr,
         body: Box<Stmt>,
-        label: Option<EcoString>,
+        label: Option<Ecow>,
     },
     Default {
         body: Box<Stmt>,
-        label: Option<EcoString>,
+        label: Option<Ecow>,
     },
 
     Null,
@@ -743,7 +744,7 @@ impl Stmt {
     fn resolve_goto_labels(
         self,
         labels: &mut Namespace<bool>,
-        func_name: EcoString,
+        func_name: Ecow,
     ) -> anyhow::Result<Self> {
         let mangle_label = |label| eco_format!("{func_name}.{}", label);
         match self {
@@ -1025,13 +1026,13 @@ impl Stmt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     ConstInt(i32),
-    Var(EcoString),
+    Var(Ecow),
     Unary(UnaryOp, Box<Expr>),
     Binary { op: BinaryOp, lhs: Box<Expr>, rhs: Box<Expr> },
     CompoundAssignment { op: BinaryOp, lhs: Box<Expr>, rhs: Box<Expr> },
     Assignemnt(Box<Expr>, Box<Expr>),
     Conditional { cond: Box<Expr>, then: Box<Expr>, else_: Box<Expr> },
-    FuncCall { name: EcoString, args: Vec<Expr> },
+    FuncCall { name: Ecow, args: Vec<Expr> },
 }
 impl Expr {
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {

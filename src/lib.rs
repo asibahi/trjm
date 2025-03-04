@@ -7,7 +7,7 @@ mod lexer;
 mod parser;
 mod token;
 
-use assembly::{Assembly, ToAsm};
+use assembly::ToAsm;
 
 #[derive(Clone, Copy)]
 pub enum Mode {

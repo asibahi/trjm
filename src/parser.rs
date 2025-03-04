@@ -6,9 +6,9 @@ use ecow::EcoString;
 use either::Either::{Left, Right};
 use nom::{
     Finish, IResult, Parser,
-    branch::alt,
+    branch::{alt, permutation},
     bytes::take,
-    combinator::{all_consuming, opt, verify},
+    combinator::{all_consuming, opt, success, verify},
     multi::{many, separated_list0, separated_list1},
     sequence::{delimited, preceded, separated_pair, terminated},
 };
@@ -22,7 +22,7 @@ pub fn parse(tokens: &[Token]) -> Result<Program, ParseError<'_>> {
 }
 
 fn parse_program(i: Tokens<'_>) -> IResult<Tokens<'_>, Program, ParseError<'_>> {
-    many(1.., parse_func_decl).map(Program).parse_complete(i)
+    many(1.., parse_decl).map(Program).parse_complete(i)
 }
 
 fn parse_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, Decl, ParseError<'_>> {
@@ -30,31 +30,55 @@ fn parse_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, Decl, ParseError<'_>> {
 }
 
 macro_rules! tag_token {
-    ($token:pat) => {
-        verify(take(1u8), |t: &Tokens| matches!(t.0[0], $token))
+    // weird counting stuff
+    (@$t:pat) => { 1 };
+    (@c $($token:pat),+) => { (0usize $(+ tag_token!(@$token))+) };
+
+    ($($token:pat),+) => {
+        verify(
+            take((tag_token!(@c $($token),+)   )),
+            |t: &Tokens| matches!(t.0[0..tag_token!(@c $($token),+)],[$($token),+])
+        )
     };
-    ($token:pat, $token2:pat) => {
-        verify(take(2u8), |t: &Tokens| matches!(t.0[0..2], [$token, $token2,]))
+    ($($token:pat),+ => $map:expr) => {
+        tag_token!($($token),+).map(|_| $map)
     };
 }
 
+fn parse_specifiers(i: Tokens<'_>) -> IResult<Tokens<'_>, (Type, StorageClass), ParseError<'_>> {
+    permutation::<Tokens<'_>, _, _>((
+        // type
+        tag_token!(Token::Int => Type::Int),
+        // storage class
+        alt((
+            tag_token!(Token::Static => StorageClass::Static),
+            tag_token!(Token::Extern => StorageClass::Extern),
+            success(StorageClass::None),
+        )),
+    ))
+    .parse_complete(i)
+}
+
 fn parse_var_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, VarDecl, ParseError<'_>> {
-    delimited(
-        tag_token!(Token::Int),
+    let (i, (_, sc)) = parse_specifiers.parse_complete(i)?;
+
+    terminated(
         (parse_ident, opt(preceded(tag_token!(Token::Equal), parse_expr))),
         tag_token!(Token::Semicolon),
     )
-    .map(|(name, init)| VarDecl { name, init })
+    .map(|(name, init)| VarDecl { name, init, sc })
     .parse_complete(i)
 }
 
 fn parse_func_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, FuncDecl, ParseError<'_>> {
-    let (i, name) = preceded(tag_token!(Token::Int), parse_ident).parse_complete(i)?;
+    let (i, (_, sc)) = parse_specifiers.parse_complete(i)?;
+
+    let (i, name) = parse_ident.parse_complete(i)?;
 
     let (i, params) = delimited(
         tag_token!(Token::ParenOpen),
         alt((
-            tag_token!(Token::Void).map(|_| Vec::new()),
+            tag_token!(Token::Void => Vec::new()),
             separated_list1(
                 tag_token!(Token::Comma),
                 preceded(tag_token!(Token::Int), parse_ident),
@@ -65,9 +89,9 @@ fn parse_func_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, FuncDecl, ParseError<'_
     .parse_complete(i)?;
 
     let (i, body) =
-        parse_block.map(Some).or(tag_token!(Token::Semicolon).map(|_| None)).parse_complete(i)?;
+        parse_block.map(Some).or(tag_token!(Token::Semicolon => None)).parse_complete(i)?;
 
-    let func_def = FuncDecl { name, params, body };
+    let func_def = FuncDecl { name, params, body, sc };
 
     Ok((i, func_def))
 }
@@ -109,8 +133,8 @@ fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
         .and(parse_stmt)
         .map(|(n, s)| Stmt::Label(n, Box::new(s)));
 
-    let break_ = tag_token!(Token::Break, Token::Semicolon).map(|_| Stmt::Break(None));
-    let continue_ = tag_token!(Token::Continue, Token::Semicolon).map(|_| Stmt::Continue(None));
+    let break_ = tag_token!(Token::Break, Token::Semicolon => Stmt::Break(None));
+    let continue_ = tag_token!(Token::Continue, Token::Semicolon => Stmt::Continue(None));
 
     let while_ = preceded(
         tag_token!(Token::While, Token::ParenOpen),
@@ -162,7 +186,7 @@ fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
     let dflt = preceded(tag_token!(Token::Default, Token::Colon), parse_stmt)
         .map(|body| Stmt::Default { body: Box::new(body), label: None });
 
-    let null = tag_token!(Token::Semicolon).map(|_| Stmt::Null);
+    let null = tag_token!(Token::Semicolon => Stmt::Null);
 
     alt((
         ret, expr, if_else, compound, goto, label, break_, continue_, while_, do_while_, for_,
@@ -184,14 +208,14 @@ macro_rules! binop {
         binary_op(
             $prec,
             Assoc::Left,
-            tag_token!(Token::$token).map(|_| BinaryOp::$binop).map(Typical),
+            tag_token!(Token::$token => BinaryOp::$binop).map(Typical),
         )
     };
     (= $token:ident, $binop:ident) => {
         binary_op(
             14,
             Assoc::Right,
-            tag_token!(Token::$token).map(|_| BinaryOp::$binop).map(CompoundAssignment),
+            tag_token!(Token::$token => BinaryOp::$binop).map(CompoundAssignment),
         )
     };
 }
@@ -203,18 +227,18 @@ fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
     precedence(
         // prefix
         alt((
-            unary_op(2, tag_token!(Token::Hyphen).map(|_| UnaryOp::Negate)),
-            unary_op(2, tag_token!(Token::Tilde).map(|_| UnaryOp::Complement)),
-            unary_op(2, tag_token!(Token::Bang).map(|_| UnaryOp::Not)),
-            unary_op(2, tag_token!(Token::Plus).map(|_| UnaryOp::Plus)),
+            unary_op(2, tag_token!(Token::Hyphen => UnaryOp::Negate)),
+            unary_op(2, tag_token!(Token::Tilde => UnaryOp::Complement)),
+            unary_op(2, tag_token!(Token::Bang => UnaryOp::Not)),
+            unary_op(2, tag_token!(Token::Plus => UnaryOp::Plus)),
             // chapter 5 extra credit
-            unary_op(2, tag_token!(Token::DblPlus).map(|_| UnaryOp::IncPre)),
-            unary_op(2, tag_token!(Token::DblHyphen).map(|_| UnaryOp::DecPre)),
+            unary_op(2, tag_token!(Token::DblPlus => UnaryOp::IncPre)),
+            unary_op(2, tag_token!(Token::DblHyphen => UnaryOp::DecPre)),
         )),
         // postfix // chapter 5 extra credit
         alt((
-            unary_op(1, tag_token!(Token::DblPlus).map(|_| UnaryOp::IncPost)),
-            unary_op(1, tag_token!(Token::DblHyphen).map(|_| UnaryOp::DecPost)),
+            unary_op(1, tag_token!(Token::DblPlus => UnaryOp::IncPost)),
+            unary_op(1, tag_token!(Token::DblHyphen => UnaryOp::DecPost)),
         )),
         // binary
         alt((
@@ -253,7 +277,7 @@ fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
             )),
             // chapter 5
             alt((
-                binary_op(14, Assoc::Right, tag_token!(Token::Equal).map(|_| Assignment)),
+                binary_op(14, Assoc::Right, tag_token!(Token::Equal => Assignment)),
                 // chapter 5 extra credit
                 binop!(= PlusEqual, Add),
                 binop!(= HyphenEqual, Subtract),

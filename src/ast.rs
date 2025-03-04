@@ -24,7 +24,7 @@ impl IdCtx {
 }
 
 #[derive(Debug, Clone)]
-pub struct Program(pub Vec<FuncDecl>);
+pub struct Program(pub Vec<Decl>);
 impl Program {
     pub fn compile(&self) -> ir::Program {
         let mut buf = vec![];
@@ -51,9 +51,16 @@ impl Program {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum Type {
+pub enum Type {
     Int,
     Func { arity: usize, defined: bool },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum StorageClass {
+    Static,
+    Extern,
+    None,
 }
 
 #[derive(Debug, Clone)]
@@ -76,12 +83,25 @@ impl Decl {
             Self::Var(var) => Self::Var(var.type_check(symbols)?),
         })
     }
+
+    fn resolve_switch_statements(self) -> Option<Self> {
+        todo!()
+    }
+
+    fn resolve_goto_labels(self) -> Option<Self> {
+        todo!()
+    }
+
+    fn resolve_loop_labels(self) -> Option<Self> {
+        todo!()
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct VarDecl {
     pub name: EcoString,
     pub init: Option<Expr>,
+    pub sc: StorageClass,
 }
 impl VarDecl {
     fn type_check(self, symbols: &mut Namespace<Type>) -> Option<Self> {
@@ -92,7 +112,7 @@ impl VarDecl {
             None => None,
         };
 
-        Some(Self { name: self.name, init })
+        Some(Self { name: self.name, init, sc: StorageClass::None })
     }
 
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> Option<Self> {
@@ -110,7 +130,7 @@ impl VarDecl {
         let init =
             if let Some(init) = self.init { Some(init.resolve_identifiers(map)?) } else { None };
 
-        Some(VarDecl { name: unique_name, init })
+        Some(VarDecl { name: unique_name, init, sc: StorageClass::None })
     }
 }
 
@@ -119,6 +139,7 @@ pub struct FuncDecl {
     pub name: EcoString,
     pub params: Vec<EcoString>,
     pub body: Option<Block>,
+    pub sc: StorageClass,
 }
 impl FuncDecl {
     fn type_check(self, symbols: &mut Namespace<Type>) -> Option<Self> {
@@ -155,7 +176,7 @@ impl FuncDecl {
             None
         };
 
-        Some(Self { name: self.name, params: self.params, body })
+        Some(Self { name: self.name, params: self.params, body, sc: StorageClass::None })
     }
 
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> Option<Self> {
@@ -173,8 +194,9 @@ impl FuncDecl {
 
         let mut params = Vec::with_capacity(self.params.len());
         for param in self.params {
-            let VarDecl { name, .. } = (VarDecl { name: param.clone(), init: None })
-                .resolve_identifiers(&mut inner_map)?;
+            let VarDecl { name, .. } =
+                (VarDecl { name: param.clone(), init: None, sc: StorageClass::None })
+                    .resolve_identifiers(&mut inner_map)?;
 
             params.push(name);
         }
@@ -184,7 +206,7 @@ impl FuncDecl {
             None => None,
         };
 
-        Some(Self { name: self.name, params, body })
+        Some(Self { name: self.name, params, body, sc: StorageClass::None })
     }
 
     fn resolve_goto_labels(self) -> Option<Self> {
@@ -199,7 +221,7 @@ impl FuncDecl {
             return None;
         };
 
-        Some(Self { name: self.name, body, params: self.params })
+        Some(Self { name: self.name, body, params: self.params, sc: StorageClass::None })
     }
 
     fn resolve_loop_labels(self) -> Option<Self> {
@@ -208,7 +230,7 @@ impl FuncDecl {
             None => None,
         };
 
-        Some(Self { name: self.name, body, params: self.params })
+        Some(Self { name: self.name, body, params: self.params, sc: StorageClass::None })
     }
 
     fn resolve_switch_statements(self) -> Option<Self> {
@@ -217,7 +239,7 @@ impl FuncDecl {
             None => None,
         };
 
-        Some(Self { name: self.name, body, params: self.params })
+        Some(Self { name: self.name, body, params: self.params, sc: StorageClass::None })
     }
 }
 
@@ -234,7 +256,11 @@ impl BlockItem {
         }
     }
 
-    fn resolve_goto_labels(self, labels: &mut Namespace<bool>, func_name: EcoString) -> Option<Self> {
+    fn resolve_goto_labels(
+        self,
+        labels: &mut Namespace<bool>,
+        func_name: EcoString,
+    ) -> Option<Self> {
         match self {
             Self::S(stmt) => Some(Self::S(stmt.resolve_goto_labels(labels, func_name)?)),
             d @ Self::D(_) => Some(d),
@@ -278,7 +304,11 @@ impl Block {
 
         Some(Self(acc))
     }
-    fn resolve_goto_labels(self, labels: &mut Namespace<bool>, func_name: EcoString) -> Option<Self> {
+    fn resolve_goto_labels(
+        self,
+        labels: &mut Namespace<bool>,
+        func_name: EcoString,
+    ) -> Option<Self> {
         let mut acc = Vec::with_capacity(self.0.len());
         for bi in self.0 {
             let bi = bi.resolve_goto_labels(labels, func_name.clone())?;
@@ -529,7 +559,11 @@ impl Stmt {
         }
     }
 
-    fn resolve_goto_labels(self, labels: &mut Namespace<bool>, func_name: EcoString) -> Option<Self> {
+    fn resolve_goto_labels(
+        self,
+        labels: &mut Namespace<bool>,
+        func_name: EcoString,
+    ) -> Option<Self> {
         let mangle_label = |label| eco_format!("{func_name}.{}", label);
         match self {
             Self::GoTo(label) => {
@@ -562,16 +596,20 @@ impl Stmt {
 
                 Some(Self::If { cond, then, else_ })
             }
-            Self::Compound(block) => Some(Self::Compound(block.resolve_goto_labels(labels, func_name)?)),
+            Self::Compound(block) => {
+                Some(Self::Compound(block.resolve_goto_labels(labels, func_name)?))
+            }
             any @ (Self::Return(_)
             | Self::Null
             | Self::Expression(_)
             | Self::Break(_)
             | Self::Continue(_)) => Some(any),
 
-            Self::While { body, cond, label } => {
-                Some(Self::While { body: Box::new(body.resolve_goto_labels(labels, func_name)?), cond, label })
-            }
+            Self::While { body, cond, label } => Some(Self::While {
+                body: Box::new(body.resolve_goto_labels(labels, func_name)?),
+                cond,
+                label,
+            }),
             Self::DoWhile { body, cond, label } => Some(Self::DoWhile {
                 body: Box::new(body.resolve_goto_labels(labels, func_name)?),
                 cond,
@@ -592,12 +630,15 @@ impl Stmt {
                 label,
                 cases,
             }),
-            Self::Case { cnst, body, label } => {
-                Some(Self::Case { cnst, body: Box::new(body.resolve_goto_labels(labels, func_name)?), label })
-            }
-            Self::Default { body, label } => {
-                Some(Self::Default { body: Box::new(body.resolve_goto_labels(labels, func_name)?), label })
-            }
+            Self::Case { cnst, body, label } => Some(Self::Case {
+                cnst,
+                body: Box::new(body.resolve_goto_labels(labels, func_name)?),
+                label,
+            }),
+            Self::Default { body, label } => Some(Self::Default {
+                body: Box::new(body.resolve_goto_labels(labels, func_name)?),
+                label,
+            }),
         }
     }
 

@@ -102,6 +102,8 @@ impl ToIr for ast::Stmt {
     type Output = ();
     #[expect(clippy::too_many_lines)]
     fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
+        let goto_label = |s| eco_format!("goto.{s}");
+
         let brk_label = |s| eco_format!("brk.{s}");
         let cntn_label = |s| eco_format!("cntn.{s}");
 
@@ -147,10 +149,10 @@ impl ToIr for ast::Stmt {
             Self::Compound(b) => b.to_ir(instrs),
 
             Self::GoTo(label) => {
-                instrs.push(Instr::Jump { target: eco_format!(".Lgoto..{label}") });
+                instrs.push(Instr::Jump { target: goto_label(label) });
             }
             Self::Label(label, stmt) => {
-                instrs.push(Instr::Label(eco_format!(".Lgoto..{label}")));
+                instrs.push(Instr::Label(goto_label(label)));
                 stmt.to_ir(instrs);
             }
 

@@ -20,6 +20,7 @@ ignored_unit_patterns = "allow"
 similar_names = "allow"
 enum_glob_use = "allow"
 should_panic_without_expect = "allow"
+needless_pass_by_value ="allow"
 
 [dev-dependencies]
 test-case = "3"

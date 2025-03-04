@@ -191,7 +191,7 @@ impl FuncDecl {
         // labels are function level
         let mut label_map = FxHashMap::default();
         let body = match self.body {
-            Some(body) => Some(body.resolve_goto_labels(&mut label_map)?),
+            Some(body) => Some(body.resolve_goto_labels(&mut label_map, self.name.clone())?),
             None => None,
         };
 
@@ -234,9 +234,9 @@ impl BlockItem {
         }
     }
 
-    fn resolve_goto_labels(self, labels: &mut Namespace<bool>) -> Option<Self> {
+    fn resolve_goto_labels(self, labels: &mut Namespace<bool>, func_name: EcoString) -> Option<Self> {
         match self {
-            Self::S(stmt) => Some(Self::S(stmt.resolve_goto_labels(labels)?)),
+            Self::S(stmt) => Some(Self::S(stmt.resolve_goto_labels(labels, func_name)?)),
             d @ Self::D(_) => Some(d),
         }
     }
@@ -278,10 +278,10 @@ impl Block {
 
         Some(Self(acc))
     }
-    fn resolve_goto_labels(self, labels: &mut Namespace<bool>) -> Option<Self> {
+    fn resolve_goto_labels(self, labels: &mut Namespace<bool>, func_name: EcoString) -> Option<Self> {
         let mut acc = Vec::with_capacity(self.0.len());
         for bi in self.0 {
-            let bi = bi.resolve_goto_labels(labels)?;
+            let bi = bi.resolve_goto_labels(labels, func_name.clone())?;
             acc.push(bi);
         }
 
@@ -529,9 +529,11 @@ impl Stmt {
         }
     }
 
-    fn resolve_goto_labels(self, labels: &mut Namespace<bool>) -> Option<Self> {
+    fn resolve_goto_labels(self, labels: &mut Namespace<bool>, func_name: EcoString) -> Option<Self> {
+        let mangle_label = |label| eco_format!("{func_name}.{}", label);
         match self {
             Self::GoTo(label) => {
+                let label = mangle_label(label);
                 if !labels.contains_key(&label) {
                     labels.insert(label.clone(), false);
                 }
@@ -539,26 +541,28 @@ impl Stmt {
                 Some(Self::GoTo(label))
             }
             Self::Label(label, s) => {
+                let label = mangle_label(label);
+
                 if labels.get(&label).is_some_and(|v| *v) {
                     eprintln!("repeated label : {label}");
 
                     return None;
                 }
                 labels.insert(label.clone(), true);
-                let s = s.resolve_goto_labels(labels)?;
+                let s = s.resolve_goto_labels(labels, func_name)?;
 
                 Some(Self::Label(label, Box::new(s)))
             }
             Self::If { cond, then, else_ } => {
-                let then = Box::new(then.resolve_goto_labels(labels)?);
+                let then = Box::new(then.resolve_goto_labels(labels, func_name.clone())?);
                 let else_ = match else_ {
-                    Some(s) => Some(Box::new(s.resolve_goto_labels(labels)?)),
+                    Some(s) => Some(Box::new(s.resolve_goto_labels(labels, func_name)?)),
                     None => None,
                 };
 
                 Some(Self::If { cond, then, else_ })
             }
-            Self::Compound(block) => Some(Self::Compound(block.resolve_goto_labels(labels)?)),
+            Self::Compound(block) => Some(Self::Compound(block.resolve_goto_labels(labels, func_name)?)),
             any @ (Self::Return(_)
             | Self::Null
             | Self::Expression(_)
@@ -566,10 +570,10 @@ impl Stmt {
             | Self::Continue(_)) => Some(any),
 
             Self::While { body, cond, label } => {
-                Some(Self::While { body: Box::new(body.resolve_goto_labels(labels)?), cond, label })
+                Some(Self::While { body: Box::new(body.resolve_goto_labels(labels, func_name)?), cond, label })
             }
             Self::DoWhile { body, cond, label } => Some(Self::DoWhile {
-                body: Box::new(body.resolve_goto_labels(labels)?),
+                body: Box::new(body.resolve_goto_labels(labels, func_name)?),
                 cond,
                 label,
             }),
@@ -577,22 +581,22 @@ impl Stmt {
                 init,
                 cond,
                 post,
-                body: Box::new(body.resolve_goto_labels(labels)?),
+                body: Box::new(body.resolve_goto_labels(labels, func_name)?),
                 label,
             }),
 
             // extra extra credit // Incomplete
             Self::Switch { ctrl, body, label, cases } => Some(Self::Switch {
                 ctrl,
-                body: Box::new(body.resolve_goto_labels(labels)?),
+                body: Box::new(body.resolve_goto_labels(labels, func_name)?),
                 label,
                 cases,
             }),
             Self::Case { cnst, body, label } => {
-                Some(Self::Case { cnst, body: Box::new(body.resolve_goto_labels(labels)?), label })
+                Some(Self::Case { cnst, body: Box::new(body.resolve_goto_labels(labels, func_name)?), label })
             }
             Self::Default { body, label } => {
-                Some(Self::Default { body: Box::new(body.resolve_goto_labels(labels)?), label })
+                Some(Self::Default { body: Box::new(body.resolve_goto_labels(labels, func_name)?), label })
             }
         }
     }

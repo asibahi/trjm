@@ -78,8 +78,16 @@ impl ToIr for () {
 impl ToIr for ast::Program {
     type Output = Program;
     fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
-        // Program(self.0.iter().filter_map(|fd| fd.body.as_ref().map(|_| fd.to_ir(instrs))).collect())
-        todo!()
+        Program(
+            self.0
+                .iter()
+                .filter_map(|fd| {
+                    // todo fix
+                    let ast::Decl::Func(fd) = fd else { return None };
+                    fd.body.as_ref().map(|_| fd.to_ir(instrs))
+                })
+                .collect(),
+        )
     }
 }
 impl ToIr for ast::FuncDecl {

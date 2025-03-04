@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.97"
 ecow = "0.2.3"
 either = "1.14.0"
 nom = "8"

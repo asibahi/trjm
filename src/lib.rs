@@ -50,9 +50,12 @@ pub fn compile(input: &PathBuf, mode: Mode) -> Result<PathBuf, u8> {
         return Err(0);
     }
 
-    let Some(prgm) = prgm.semantic_analysis() else {
-        eprintln!("failed semantic analysis.");
-        return Err(5);
+    let prgm = match prgm.semantic_analysis() {
+        Ok(prgm) => prgm,
+        Err(e) => {
+            eprintln!("failed semantic analysis. {e}");
+            return Err(5);
+        }
     };
 
     if matches!(mode, Mode::Validate) {

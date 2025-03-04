@@ -112,12 +112,12 @@ impl Assembly for FuncDef {
 
         self.instrs.replace_pseudos(&mut map, &mut stack_depth);
 
-        self.stack_size = stack_depth.abs();
+        self.stack_size = stack_depth;
     }
 
     fn adjust_instrs(&mut self) {
         '_stack_frame: {
-            let sd = ((self.stack_size + 15) / 16) * 16;
+            let sd = self.stack_size.unsigned_abs().next_multiple_of(16);
 
             self.instrs.insert(0, Instr::AllocateStack(sd));
         }
@@ -190,8 +190,8 @@ pub enum Instr {
     JmpCC(CondCode, EcoString),
     SetCC(CondCode, Operand),
     Label(EcoString),
-    AllocateStack(i32),
-    DeallocateStack(i32),
+    AllocateStack(u32),
+    DeallocateStack(u32),
     Push(Operand),
     Call(EcoString),
     Ret,
@@ -223,10 +223,10 @@ impl Assembly for Instr {
             Self::Cdq => _ = writeln!(f, "\tcdq"),
 
             Self::AllocateStack(i) => {
-                _ = writeln!(f, "\tsubq    {:<7} %rsp", to_str!(Imm(*i)) + ",");
+                _ = writeln!(f, "\tsubq    {:<7} %rsp", to_str!(Imm(*i as i32)) + ",");
             }
             Self::DeallocateStack(i) => {
-                _ = writeln!(f, "\taddq    {:<7} %rsp", to_str!(Imm(*i)) + ",");
+                _ = writeln!(f, "\taddq    {:<7} %rsp", to_str!(Imm(*i as i32)) + ",");
             }
 
             Self::Push(op) => _ = writeln!(f, "\tpushq   {}", to_str!(op)),
@@ -580,7 +580,7 @@ impl ToAsm for ir::Instr {
                     }))
                     .chain([Instr::Call(name.clone())])
                     .chain((!stack_args.is_empty()).then_some(Instr::DeallocateStack(
-                        8 * stack_args.len() as i32
+                        8 * stack_args.len() as u32
                             + (stack_args.len() % 2 != 0).then_some(8).unwrap_or_default(),
                     )))
                     .chain([Instr::Mov(Reg(AX, 4), dst.to_asm())])

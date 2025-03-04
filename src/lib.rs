@@ -82,12 +82,11 @@ pub fn compile(input: &PathBuf, mode: Mode) -> Result<PathBuf, u8> {
 
         let buf = String::from_utf8_lossy(&buf);
         eprintln!("{buf}");
-        return Err(0);
     }
 
     let output = input.with_extension("s");
 
-    let Ok(mut output_file) = std::fs::File::create_new(&output) else {
+    let Ok(mut output_file) = std::fs::File::create(&output) else {
         eprintln!("couldn't write to {}.", output.to_string_lossy());
         return Err(5);
     };

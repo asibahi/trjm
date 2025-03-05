@@ -1,10 +1,10 @@
-use crate::ir::{self, ToIr};
+use crate::ir::{self, GEN, ToIr};
 use ecow::{EcoString as Ecow, eco_format};
 use either::Either::{self, Left, Right};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::{
     collections::{HashSet, hash_map::Entry},
-    sync::atomic::{AtomicUsize, Ordering::Relaxed},
+    sync::atomic::Ordering::Relaxed,
 };
 
 pub type Namespace<T> = FxHashMap<Ecow, T>;
@@ -265,8 +265,6 @@ impl VarDecl {
     }
 
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {
-        static DECL: AtomicUsize = AtomicUsize::new(0);
-
         if map.get(&self.name).is_some_and(|idctx| {
             idctx.in_current_scope && !(idctx.has_linkage && self.sc == StorageClass::Extern)
         }) {
@@ -282,7 +280,7 @@ impl VarDecl {
                 (self.name, StorageClass::Extern)
             }
             sc => {
-                let unique_name = eco_format!("{}.{}", self.name, DECL.fetch_add(1, Relaxed));
+                let unique_name = eco_format!("{}.{}", self.name, GEN.fetch_add(1, Relaxed));
 
                 // shadowing happens here
                 map.insert(self.name, IdCtx::new(unique_name.clone(), true, false));
@@ -823,8 +821,7 @@ impl Stmt {
     }
 
     fn resolve_loop_labels(self, current_label: LoopKind) -> anyhow::Result<Self> {
-        static LABEL: AtomicUsize = AtomicUsize::new(0);
-        let loop_counter = LABEL.fetch_add(1, Relaxed);
+        let loop_counter = GEN.fetch_add(1, Relaxed);
 
         match self {
             Self::Break(_) => Ok(Self::Break(Some(

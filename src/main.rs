@@ -53,13 +53,20 @@ fn parse() -> Result<(trjm::Mode, PathBuf), ExitCode> {
         _ => trjm::Mode::Executable,
     };
 
-    match args.free_from_fn(validate_path) {
-        Ok(i) => Ok((mode, i)),
+   let res = match args.free_from_fn(validate_path) {
+        Ok(i) => (mode, i),
         Err(e) => {
             eprintln!("Input file required. {e}");
-            Err(ExitCode::from(43))
+            return Err(ExitCode::from(43))
         }
+    };
+
+    if !args.finish().is_empty() {
+        eprintln!("Unknwon additional arguments");
+        return Err(ExitCode::from(99));
     }
+
+    Ok(res)
 }
 
 fn validate_path(s: &str) -> Result<PathBuf, &'static str> {

@@ -6,6 +6,8 @@ use ecow::{EcoString as Ecow, eco_format};
 use either::Either::{Left, Right};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
+pub static GEN: AtomicUsize = AtomicUsize::new(0);
+
 #[derive(Debug, Clone)]
 pub struct Program {
     pub top_level: Vec<TopLevel>,
@@ -152,10 +154,9 @@ impl ToIr for ast::Stmt {
                 expr.to_ir(instrs);
             }
             Self::If { cond, then, else_ } => {
-                static IF: AtomicUsize = AtomicUsize::new(0);
-                let counter = IF.fetch_add(1, Relaxed);
+                let counter = GEN.fetch_add(1, Relaxed);
 
-                let else_label = eco_format!("if.else.{}", counter);
+                let else_label = eco_format!("else.{}", counter);
 
                 let cond = cond.to_ir(instrs);
                 // Do I need Copy Instr here ?
@@ -164,7 +165,7 @@ impl ToIr for ast::Stmt {
                 then.to_ir(instrs);
 
                 if let Some(else_) = else_ {
-                    let end_label = eco_format!("if.end.{}", counter);
+                    let end_label = eco_format!("end.{}", counter);
 
                     instrs.extend([
                         Instr::Jump { target: end_label.clone() },
@@ -192,9 +193,7 @@ impl ToIr for ast::Stmt {
             Self::Null => {}
 
             Self::Switch { ctrl, body, label: Some(label), cases } => {
-                static SWTCH: AtomicUsize = AtomicUsize::new(0);
-
-                let dst = Place(eco_format!("swch.tmp.{}", SWTCH.fetch_add(1, Relaxed)));
+                let dst = Place(eco_format!("swch{}", GEN.fetch_add(1, Relaxed)));
 
                 let ctrl = ctrl.to_ir(instrs);
 
@@ -309,11 +308,9 @@ impl ToIr for ast::Expr {
                 expr,
             ) => postfix_prefix_instrs(instrs, *op, expr),
             Self::Unary(unary_op, expr) => {
-                static UNARY_TMP: AtomicUsize = AtomicUsize::new(0);
-
                 let src = expr.to_ir(instrs);
 
-                let dst_name = eco_format!("unop.tmp.{}", UNARY_TMP.fetch_add(1, Relaxed));
+                let dst_name = eco_format!("1op{}", GEN.fetch_add(1, Relaxed));
                 let dst = Place(dst_name);
                 let op = unary_op.to_ir(instrs);
 
@@ -325,12 +322,10 @@ impl ToIr for ast::Expr {
                 logical_ops_instrs(instrs, *op, lhs, rhs)
             }
             Self::Binary { op, lhs, rhs } => {
-                static BINARY_TMP: AtomicUsize = AtomicUsize::new(0);
-
                 let lhs = lhs.to_ir(instrs);
                 let rhs = rhs.to_ir(instrs);
 
-                let dst_name = eco_format!("binop.tmp.{}", BINARY_TMP.fetch_add(1, Relaxed));
+                let dst_name = eco_format!("2nop{}", GEN.fetch_add(1, Relaxed));
                 let dst = Place(dst_name);
 
                 let op = op.to_ir(instrs);
@@ -363,12 +358,11 @@ impl ToIr for ast::Expr {
             }
 
             Self::Conditional { cond, then, else_ } => {
-                static TERNARY: AtomicUsize = AtomicUsize::new(0);
-                let counter = TERNARY.fetch_add(1, Relaxed);
+                let counter = GEN.fetch_add(1, Relaxed);
 
-                let end_label = eco_format!("ter.end.{}", counter);
-                let e2_label = eco_format!("ter.e2.{}", counter);
-                let result = Place(eco_format!("ter.tmp.{}", counter));
+                let end_label = eco_format!("end.{}", counter);
+                let e2_label = eco_format!("e2.{}", counter);
+                let result = Place(eco_format!("ter{}", counter));
 
                 let cond = cond.to_ir(instrs);
                 instrs.push(Instr::JumpIfZero { cond, target: e2_label.clone() });
@@ -390,8 +384,7 @@ impl ToIr for ast::Expr {
             }
 
             Self::FuncCall { name, args } => {
-                static COUNTER: AtomicUsize = AtomicUsize::new(0);
-                let dst = eco_format!("fcall.tmp.{}", COUNTER.fetch_add(1, Relaxed));
+                let dst = eco_format!("call.{}", GEN.fetch_add(1, Relaxed));
                 let dst = Place(dst);
 
                 let vals = args.iter().map(|arg| arg.to_ir(instrs)).collect();
@@ -405,7 +398,6 @@ impl ToIr for ast::Expr {
 }
 
 fn postfix_prefix_instrs(instrs: &mut Vec<Instr>, op: ast::UnaryOp, expr: &ast::Expr) -> Value {
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     let ast::Expr::Var(ref dst) = *expr else {
         unreachable!("place expression should be resolved earlier.")
@@ -420,7 +412,7 @@ fn postfix_prefix_instrs(instrs: &mut Vec<Instr>, op: ast::UnaryOp, expr: &ast::
         _ => unreachable!(),
     };
 
-    let tmp = eco_format!("fix.tmp.{}", COUNTER.fetch_add(1, Relaxed));
+    let tmp = eco_format!("fix.{}", GEN.fetch_add(1, Relaxed));
     let tmp = Place(tmp);
 
     let var = Place(dst.clone());
@@ -447,15 +439,14 @@ fn logical_ops_instrs(
     lhs: &ast::Expr,
     rhs: &ast::Expr,
 ) -> Value {
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-    let counter = COUNTER.fetch_add(1, Relaxed);
+    let counter = GEN.fetch_add(1, Relaxed);
 
     let or = matches!(op, ast::BinaryOp::Or);
 
-    let cond_jump = eco_format!("lgc.jmp.{}", counter);
-    let end = eco_format!("lgc.end.{}", counter);
+    let cond_jump = eco_format!("jmp.{}", counter);
+    let end = eco_format!("end.{}", counter);
 
-    let dst_name = eco_format!("lgc.tmp.{}", counter);
+    let dst_name = eco_format!("lgc.{}", counter);
     let dst = Place(dst_name);
 
     let v1 = lhs.to_ir(instrs);

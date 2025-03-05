@@ -226,16 +226,16 @@ impl Instr {
 
                 _ = writeln!(f, "\tcmpl    {op1:<7} {op2}");
             }
-            Self::Jmp(label) => _ = writeln!(f, "\tjmp     .L{label}"),
-            Self::JmpCC(cond, label) => {
-                let cond = cond.emit_code();
-                _ = writeln!(f, "\tj{cond:<6} .L{label}");
-            }
             Self::SetCC(cond, op) => {
                 let cond = cond.emit_code();
                 let op = op.emit_code();
 
                 _ = writeln!(f, "\tset{cond:<4} {op}");
+            }
+            Self::Jmp(label) => _ = writeln!(f, "\tjmp     .L{label}"),
+            Self::JmpCC(cond, label) => {
+                let cond = cond.emit_code();
+                _ = writeln!(f, "\tj{cond:<6} .L{label}");
             }
             Self::Label(label) => _ = writeln!(f, ".L{label}:"),
         }

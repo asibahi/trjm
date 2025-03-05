@@ -105,14 +105,6 @@ impl Token {
     pub fn unwrap_ident(&self) -> Option<Ecow> {
         if let Token::Ident(s) = self { Some(s.clone()) } else { None }
     }
-
-    pub fn unwrap_number(&self) -> Option<i64> {
-        match self {
-            Token::IntLiteral(i) => Some(i64::from(*i)),
-            Token::LongLiteral(i) => Some(*i),
-            _ => None,
-        }
-    }
 }
 
 type LexError<'s> = ();
@@ -279,6 +271,7 @@ macro_rules! radix (
 
 #[derive(Debug, Clone, Copy)]
 enum IntType {
+    LongLong,
     Long,
     Unknown,
 }
@@ -293,13 +286,14 @@ token!(
     ))
     .and(terminated(
         alt((
-            tag("l").or(tag("L")).or(tag("ll")).or(tag("LL")).map(|_| IntType::Long),
+            tag("l").or(tag("L")).map(|_| IntType::Long),
+            tag("ll").or(tag("LL")).map(|_| IntType::LongLong),
             success(IntType::Unknown)
         )),
         not(satisfy(|c| c == '_' || c.is_alphanum())),
     ))
     .map(|(lit, ty)| match ty {
-        IntType::Long => Token::LongLiteral(lit),
+        IntType::Long | IntType::LongLong => Token::LongLiteral(lit),
         IntType::Unknown => match i32::try_from(lit) {
             Ok(i) => Token::IntLiteral(i),
             Err(_) => Token::LongLiteral(lit),
@@ -333,6 +327,7 @@ mod tests {
     #[test_case("0b10" => 2)]
     #[test_case("0b10-0xFFF" => 2)]
     #[test_case("0b10;int" => 2)]
+    // invalid
     #[test_case("8Ll" => panics "illegal literal")]
     #[test_case("0x0g" => panics "illegal literal")]
     #[test_case("_0x0" => panics "illegal literal")]
@@ -349,7 +344,11 @@ mod tests {
     #[test_case("0b10b" => panics "illegal literal")]
     #[test_case("0b10_" => panics "illegal literal")]
     fn number_test(i: &str) -> i64 {
-        number(i).expect("illegal literal").1.unwrap_number().unwrap()
+        match number(i).expect("illegal literal").1 {
+            Token::IntLiteral(i) => i64::from(i),
+            Token::LongLiteral(i) => i,
+            _ => unreachable!()
+        }
     }
 }
 

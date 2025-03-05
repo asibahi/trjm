@@ -1,9 +1,5 @@
 use pico_args::Arguments;
-use std::{
-    fs::remove_file,
-    path::PathBuf,
-    process::{Command, ExitCode},
-};
+use std::{fs::remove_file, path::PathBuf, process::ExitCode};
 
 fn main() -> ExitCode {
     let (mode, input) = match parse() {
@@ -53,16 +49,16 @@ fn parse() -> Result<(trjm::Mode, PathBuf), ExitCode> {
         _ => trjm::Mode::Executable,
     };
 
-   let res = match args.free_from_fn(validate_path) {
+    let res = match args.free_from_fn(validate_path) {
         Ok(i) => (mode, i),
         Err(e) => {
             eprintln!("Input file required. {e}");
-            return Err(ExitCode::from(43))
+            return Err(ExitCode::from(43));
         }
     };
-
-    if !args.finish().is_empty() {
-        eprintln!("Unknwon additional arguments");
+    let rem = args.finish();
+    if !rem.is_empty() {
+        eprintln!("Unknwon additional arguments: {rem:?}");
         return Err(ExitCode::from(99));
     }
 
@@ -81,29 +77,36 @@ fn validate_path(s: &str) -> Result<PathBuf, &'static str> {
 fn preprocess(input: &PathBuf) -> Result<PathBuf, ExitCode> {
     let output = input.with_extension("i");
 
-    let status = Command::new("gcc").arg("-E").arg("-P").arg(input).arg("-o").arg(&output).status();
-
-    if status.is_err() || status.is_ok_and(|s| !s.success()) {
-        eprintln!("preprocessor failed");
-        Err(ExitCode::from(42))
-    } else {
-        Ok(output)
+    let cmd =
+        duct::cmd!("gcc", "-E", "-P", input, "-o", &output).unchecked().stderr_capture().run();
+    match cmd {
+        Ok(o) if !o.status.success() => {
+            eprintln!("preprocessor failed:\n{}", String::from_utf8_lossy(&o.stdout));
+            Err(ExitCode::from(41))
+        }
+        Err(e) => {
+            eprintln!("preprocessor io error: {e}");
+            Err(ExitCode::from(42))
+        }
+        Ok(_) => Ok(output),
     }
 }
 
 fn assemble(input: &PathBuf, object_file: bool) -> Result<PathBuf, ExitCode> {
-    let output = if object_file { input.with_extension("o") } else { input.with_extension("") };
+    let (ext, obj) = if object_file { ("o", "-c") } else { ("", "") };
 
-    let mut cmd = Command::new("gcc");
-    if object_file {
-        cmd.arg("-c");
-    }
-    let status = cmd.arg(input).arg("-o").arg(&output).status();
+    let output = input.with_extension(ext);
+    let cmd = duct::cmd!("gcc", obj, input, "-o", &output).unchecked().stderr_capture().run();
 
-    if status.is_err() || status.is_ok_and(|s| !s.success()) {
-        eprintln!("assembler failed");
-        Err(ExitCode::from(65))
-    } else {
-        Ok(output)
+    match cmd {
+        Ok(o) if !o.status.success() => {
+            eprintln!("assembler failed:'n{}", String::from_utf8_lossy(&o.stdout));
+            Err(ExitCode::from(66))
+        }
+        Err(e) => {
+            eprintln!("assembler io error: {e}");
+            Err(ExitCode::from(65))
+        }
+        Ok(_) => Ok(output),
     }
 }

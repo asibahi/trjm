@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.97"
+duct = "0.13.7"
 ecow = "0.2.3"
 either = "1.14.0"
 nom = "8"

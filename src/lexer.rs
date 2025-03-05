@@ -1,18 +1,119 @@
 #![warn(dead_code)]
 
-use crate::token::Token;
+use ecow::EcoString as Ecow;
 use nom::{
-    AsChar, Finish, IResult, Parser,
+    AsChar, Finish, IResult, Input, Parser,
     branch::alt,
     bytes::{tag, take_while},
     character::{
-        complete::{bin_digit1, hex_digit1, i32, oct_digit0},
+        complete::{bin_digit1, hex_digit1, i64, oct_digit0},
         multispace0, satisfy,
     },
-    combinator::{all_consuming, cut, not, recognize},
+    combinator::{all_consuming, cut, not, recognize, success},
     multi::many,
     sequence::{preceded, terminated},
 };
+use std::iter::{Cloned, Enumerate};
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Token {
+    // Stuff
+    Ident(Ecow),
+    IntLiteral(i32),
+    LongLiteral(i64),
+
+    // types
+    Int,
+    Long,
+
+    // Keywords
+    Void, // also doubtful
+    Return,
+    If,
+    Else,
+    GoTo,
+    Do,
+    While,
+    For,
+    Break,
+    Continue,
+    Switch,
+    Case,
+    Default,
+    Static,
+    Extern,
+
+    // Operators
+    Plus,      // +
+    PlusEqual, // +=
+    DblPlus,   // ++
+
+    Astrisk,
+    AstriskEqual,
+
+    ForeSlash,
+    ForeSlashEqual,
+
+    Percent,
+    PercentEqual,
+
+    Tilde,
+
+    Hyphen,      // -
+    HyphenEqual, // -=
+    DblHyphen,   // --
+
+    DblEqual,
+    Equal,
+    Bang,
+    BangEqual,
+
+    Ambersand,
+    DblAmbersand,
+    AmbersandEqual,
+
+    Pipe,
+    DblPipe,
+    PipeEqual,
+
+    Caret,
+    CaretEqual,
+
+    LessThan,     // <
+    GreaterThan,  // >
+    LessEqual,    // <=
+    GreaterEqual, // >=
+
+    LeftShift,       // <<
+    LeftShiftEqual,  // <<=
+    RightShift,      // >>
+    RightShiftEqual, // >>=
+
+    QMark,
+    Colon,
+
+    // Punctuation
+    ParenOpen,
+    ParenClose,
+    BraceOpen,
+    BraceClose,
+    Semicolon,
+    Comma,
+}
+
+impl Token {
+    pub fn unwrap_ident(&self) -> Option<Ecow> {
+        if let Token::Ident(s) = self { Some(s.clone()) } else { None }
+    }
+
+    pub fn unwrap_number(&self) -> Option<i64> {
+        match self {
+            Token::IntLiteral(i) => Some(i64::from(*i)),
+            Token::LongLiteral(i) => Some(*i),
+            _ => None,
+        }
+    }
+}
 
 type LexError<'s> = ();
 // type LexError<'s> = (&'s str, nom::ErrorKind);
@@ -149,6 +250,7 @@ token!(
     ))
     .map(|s: &str| match s {
         "int" => Token::Int,
+        "long" => Token::Long,
         "void" => Token::Void,
         "return" => Token::Return,
         "if" => Token::If,
@@ -171,22 +273,38 @@ token!(
 macro_rules! radix (
     ($tag: expr, $parser:ident, $radix:literal) =>{
         preceded($tag, cut($parser))
-        .map(|s: &str| i32::from_str_radix(s, $radix).unwrap_or_default())
+        .map(|s: &str| i64::from_str_radix(s, $radix).unwrap_or_default())
     }
 );
 
+#[derive(Debug, Clone, Copy)]
+enum IntType {
+    Long,
+    Unknown,
+}
+
 token!(
     number,
-    terminated(
+    alt((
+        radix!(tag("0x").or(tag("0X")), hex_digit1, 16),
+        radix!(tag("0b").or(tag("0B")), bin_digit1, 2),
+        radix!(tag("0"), oct_digit0, 8),
+        i64,
+    ))
+    .and(terminated(
         alt((
-            radix!(tag("0x").or(tag("0X")), hex_digit1, 16),
-            radix!(tag("0b").or(tag("0B")), bin_digit1, 2),
-            radix!(tag("0"), oct_digit0, 8),
-            i32,
+            tag("l").or(tag("L")).or(tag("ll")).or(tag("LL")).map(|_| IntType::Long),
+            success(IntType::Unknown)
         )),
         not(satisfy(|c| c == '_' || c.is_alphanum())),
-    )
-    .map(Token::NumberLiteral)
+    ))
+    .map(|(lit, ty)| match ty {
+        IntType::Long => Token::LongLiteral(lit),
+        IntType::Unknown => match i32::try_from(lit) {
+            Ok(i) => Token::IntLiteral(i),
+            Err(_) => Token::LongLiteral(lit),
+        },
+    })
 );
 
 #[cfg(test)]
@@ -194,6 +312,18 @@ mod tests {
     use super::*;
     use test_case::test_case;
 
+    // longs
+    #[test_case("0x0L" => 0)]
+    #[test_case("0x10L" => 16)]
+    #[test_case("0L" => 0)]
+    #[test_case("010L" => 8)]
+    #[test_case("10l" => 10)]
+    #[test_case("8L" => 8)]
+    #[test_case("0b0L" => 0)]
+    #[test_case("0b10L" => 2)]
+    #[test_case("0b10L-0xFFF" => 2)]
+    #[test_case("0b10L;int" => 2)]
+    // ints
     #[test_case("0x0" => 0)]
     #[test_case("0x10" => 16)]
     #[test_case("0" => 0)]
@@ -203,6 +333,7 @@ mod tests {
     #[test_case("0b10" => 2)]
     #[test_case("0b10-0xFFF" => 2)]
     #[test_case("0b10;int" => 2)]
+    #[test_case("8Ll" => panics "illegal literal")]
     #[test_case("0x0g" => panics "illegal literal")]
     #[test_case("_0x0" => panics "illegal literal")]
     #[test_case("pubg" => panics "illegal literal")]
@@ -217,7 +348,55 @@ mod tests {
     #[test_case("0b0b" => panics "illegal literal")]
     #[test_case("0b10b" => panics "illegal literal")]
     #[test_case("0b10_" => panics "illegal literal")]
-    fn any(i: &str) -> i32 {
+    fn number_test(i: &str) -> i64 {
         number(i).expect("illegal literal").1.unwrap_number().unwrap()
+    }
+}
+
+// ======
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Tokens<'s>(pub &'s [Token]);
+
+// stolen wholesale from nom's impl of &[u8]
+impl<'s> Input for Tokens<'s> {
+    type Item = Token;
+    type Iter = Cloned<std::slice::Iter<'s, Token>>;
+    type IterIndices = Enumerate<Self::Iter>;
+
+    fn input_len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn take(&self, index: usize) -> Self {
+        Self(&self.0[0..index])
+    }
+
+    fn take_from(&self, index: usize) -> Self {
+        Self(&self.0[index..])
+    }
+
+    fn take_split(&self, index: usize) -> (Self, Self) {
+        let (prefix, suffix) = self.0.split_at(index);
+        (Self(suffix), Self(prefix))
+    }
+
+    fn position<P>(&self, predicate: P) -> Option<usize>
+    where
+        P: Fn(Self::Item) -> bool,
+    {
+        self.0.iter().position(|t| predicate(t.clone()))
+    }
+
+    fn iter_elements(&self) -> Self::Iter {
+        self.0.iter().cloned()
+    }
+
+    fn iter_indices(&self) -> Self::IterIndices {
+        self.iter_elements().enumerate()
+    }
+
+    fn slice_index(&self, count: usize) -> Result<usize, nom::Needed> {
+        if self.0.len() >= count { Ok(count) } else { Err(nom::Needed::new(count - self.0.len())) }
     }
 }

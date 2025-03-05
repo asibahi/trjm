@@ -1,6 +1,6 @@
 use crate::{
     ast::*,
-    token::{Token, Tokens},
+    lexer::{Token, Tokens},
 };
 use ecow::EcoString as Ecow;
 use either::Either::{Left, Right};
@@ -302,8 +302,8 @@ fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
                 ))
                 .map(|(name, args)| Expr::FuncCall { name, args }),
             // const
-            tag_token!(Token::NumberLiteral(_))
-                .map_opt(|t: Tokens<'_>| t.0[0].unwrap_number().map(Expr::ConstInt)),
+            tag_token!(Token::IntLiteral(_))
+                .map_opt(|t: Tokens<'_>| t.0[0].unwrap_number().map(|i| Expr::ConstInt(i as i32 ))),
             // group
             delimited(tag_token!(Token::ParenOpen), parse_expr, tag_token!(Token::ParenClose)),
             //variable

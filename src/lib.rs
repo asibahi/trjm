@@ -5,7 +5,6 @@ mod ast;
 mod ir;
 mod lexer;
 mod parser;
-mod token;
 
 use assembly::ToAsm;
 

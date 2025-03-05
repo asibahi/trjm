@@ -59,10 +59,11 @@ impl Program {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Int,
-    Func { arity: usize },
+    Long,
+    Func { params: Vec<Type>, ret: Box<Type> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,11 +163,12 @@ pub struct VarDecl {
     pub name: Ecow,
     pub init: Option<Expr>,
     pub sc: StorageClass,
+    pub var_type: Type,
 }
 impl VarDecl {
     fn type_check_file(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
         let mut init = match self.init {
-            Some(Expr::ConstInt(i)) => InitValue::Initial(i),
+            Some(Expr::Const(Const::Int(i))) => InitValue::Initial(i),
             None if self.sc == StorageClass::Extern => InitValue::None,
             None => InitValue::Tentative,
             _ => anyhow::bail!("non-constant initializer"),
@@ -233,7 +235,7 @@ impl VarDecl {
             },
             StorageClass::Static => {
                 let init_value = match self.init.take() {
-                    Some(Expr::ConstInt(i)) => InitValue::Initial(i),
+                    Some(Expr::Const(Const::Int(i))) => InitValue::Initial(i),
                     None => InitValue::Initial(0),
                     _ => {
                         anyhow::bail!("non-constant initializer on local static variable");
@@ -261,7 +263,7 @@ impl VarDecl {
             }
         }
 
-        Ok(Self { name: self.name, init: self.init, sc: self.sc })
+        Ok(Self { name: self.name, init: self.init, sc: self.sc, var_type: todo!() })
     }
 
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {
@@ -292,7 +294,7 @@ impl VarDecl {
         let init =
             if let Some(init) = self.init { Some(init.resolve_identifiers(map)?) } else { None };
 
-        Ok(VarDecl { name, init, sc })
+        Ok(VarDecl { name, init, sc, var_type: todo!() })
     }
 }
 
@@ -302,6 +304,7 @@ pub struct FuncDecl {
     pub params: Vec<Ecow>,
     pub body: Option<Block>,
     pub sc: StorageClass,
+    pub fun_type: Type,
 }
 impl FuncDecl {
     fn type_check(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
@@ -324,9 +327,9 @@ impl FuncDecl {
             }
 
             Some(TypeCtx {
-                type_: Type::Func { arity },
+                type_: Type::Func { params, ret },
                 attr: Attributes::Fun { defined, global: old_global },
-            }) if *arity == self.params.len() => {
+            }) if params.len() == self.params.len() => {
                 already_defined = *defined;
                 global = *old_global;
             }
@@ -336,7 +339,7 @@ impl FuncDecl {
         symbols.insert(
             self.name.clone(),
             TypeCtx {
-                type_: Type::Func { arity: self.params.len() },
+                type_: Type::Func { params: todo!(), ret: todo!() },
                 attr: Attributes::Fun { defined: already_defined || has_body, global },
             },
         );
@@ -356,6 +359,7 @@ impl FuncDecl {
             params: self.params,
             body,
             sc: if global { StorageClass::Extern } else { StorageClass::Static },
+            fun_type: todo!(),
         })
     }
 
@@ -374,9 +378,13 @@ impl FuncDecl {
 
         let mut params = Vec::with_capacity(self.params.len());
         for param in self.params {
-            let VarDecl { name, .. } =
-                (VarDecl { name: param.clone(), init: None, sc: StorageClass::None })
-                    .resolve_identifiers(&mut inner_map)?;
+            let VarDecl { name, .. } = (VarDecl {
+                name: param.clone(),
+                init: None,
+                sc: StorageClass::None,
+                var_type: todo!(),
+            })
+            .resolve_identifiers(&mut inner_map)?;
 
             params.push(name);
         }
@@ -386,7 +394,7 @@ impl FuncDecl {
             None => None,
         };
 
-        Ok(Self { name: self.name, params, body, sc: self.sc })
+        Ok(Self { name: self.name, params, body, sc: self.sc, fun_type: todo!() })
     }
 
     fn resolve_goto_labels(self) -> anyhow::Result<Self> {
@@ -401,7 +409,7 @@ impl FuncDecl {
             anyhow::bail!("goto label already exists in function");
         };
 
-        Ok(Self { name: self.name, body, params: self.params, sc: self.sc })
+        Ok(Self { name: self.name, body, params: self.params, sc: self.sc, fun_type: todo!() })
     }
 
     fn resolve_loop_labels(self) -> anyhow::Result<Self> {
@@ -410,7 +418,7 @@ impl FuncDecl {
             None => None,
         };
 
-        Ok(Self { name: self.name, body, params: self.params, sc: self.sc })
+        Ok(Self { name: self.name, body, params: self.params, sc: self.sc, fun_type: todo!() })
     }
 
     fn resolve_switch_statements(self) -> anyhow::Result<Self> {
@@ -419,7 +427,7 @@ impl FuncDecl {
             None => None,
         };
 
-        Ok(Self { name: self.name, body, params: self.params, sc: self.sc })
+        Ok(Self { name: self.name, body, params: self.params, sc: self.sc, fun_type: todo!() })
     }
 }
 
@@ -925,7 +933,7 @@ impl Stmt {
             Self::Case { cnst, body, label } => {
                 let switch_ctx = switch_ctx.ok_or(anyhow::anyhow!("case outside of a switch"))?;
 
-                let Expr::ConstInt(value) = cnst else {
+                let Expr::Const(Const::Int(value)) = cnst else {
                     anyhow::bail!("case value not a constant");
                 };
 
@@ -1022,8 +1030,9 @@ impl Stmt {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
-    ConstInt(i32),
+    Const(Const),
     Var(Ecow),
+    Cast { to: Type, from: Box<Expr> },
     Unary(UnaryOp, Box<Expr>),
     Binary { op: BinaryOp, lhs: Box<Expr>, rhs: Box<Expr> },
     CompoundAssignment { op: BinaryOp, lhs: Box<Expr>, rhs: Box<Expr> },
@@ -1054,7 +1063,7 @@ impl Expr {
                 rhs: Box::new(rhs.resolve_identifiers(map)?),
             }),
 
-            v @ Self::ConstInt(_) => Ok(v),
+            v @ Self::Const(_) => Ok(v),
             Self::Conditional { cond, then, else_ } => Ok(Self::Conditional {
                 cond: Box::new(cond.resolve_identifiers(map)?),
                 then: Box::new(then.resolve_identifiers(map)?),
@@ -1081,34 +1090,35 @@ impl Expr {
 
                 Ok(Self::FuncCall { name, args: resolved_args })
             }
+            Self::Cast { .. } => todo!(),
         }
     }
 
     fn type_check(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
         match self {
-            Expr::FuncCall { name, args } => {
-                match symbols
+            Self::FuncCall { name, args } => {
+                match &symbols
                     .get(name.as_str())
                     .ok_or(anyhow::anyhow!("function does not exist in symbol map"))?
                     .type_
                 {
-                    Type::Int => {
-                        anyhow::bail!("Variable used as function name");
-                    }
-                    Type::Func { arity, .. } if arity != args.len() => {
+                    Type::Func { params, .. } if params.len() != args.len() => {
                         anyhow::bail!("function called with wrong number of arguments");
                     }
                     Type::Func { .. } => {}
+                    _ => {
+                        anyhow::bail!("Variable used as function name");
+                    }
                 }
 
                 for arg in args.clone() {
                     arg.type_check(symbols)?;
                 }
 
-                Ok(Expr::FuncCall { name, args })
+                Ok(Self::FuncCall { name, args })
             }
-            Expr::Var(name) => {
-                if let Some(Type::Int) = symbols.get(name.as_str()).map(|c| c.type_) {
+            Self::Var(name) => {
+                if let Some(Type::Int) = symbols.get(name.as_str()).map(|c| c.type_.clone()) {
                     Ok(Self::Var(name))
                 } else {
                     anyhow::bail!("function used as variable");
@@ -1116,32 +1126,40 @@ impl Expr {
             }
 
             // --
-            Expr::Unary(op, expr) => Ok(Self::Unary(op, Box::new(expr.type_check(symbols)?))),
+            Self::Unary(op, expr) => Ok(Self::Unary(op, Box::new(expr.type_check(symbols)?))),
 
-            Expr::Binary { op, lhs, rhs } => Ok(Self::Binary {
+            Self::Binary { op, lhs, rhs } => Ok(Self::Binary {
                 op,
                 lhs: Box::new(lhs.type_check(symbols)?),
                 rhs: Box::new(rhs.type_check(symbols)?),
             }),
 
-            Expr::Assignemnt(lhs, rhs) => Ok(Self::Assignemnt(
+            Self::Assignemnt(lhs, rhs) => Ok(Self::Assignemnt(
                 Box::new(lhs.type_check(symbols)?),
                 Box::new(rhs.type_check(symbols)?),
             )),
 
-            Expr::CompoundAssignment { op, lhs, rhs } => Ok(Self::CompoundAssignment {
+            Self::CompoundAssignment { op, lhs, rhs } => Ok(Self::CompoundAssignment {
                 op,
                 lhs: Box::new(lhs.type_check(symbols)?),
                 rhs: Box::new(rhs.type_check(symbols)?),
             }),
-            Expr::ConstInt(_) => Ok(self),
-            Expr::Conditional { cond, then, else_ } => Ok(Self::Conditional {
+            Self::Const(_) => Ok(self),
+            Self::Conditional { cond, then, else_ } => Ok(Self::Conditional {
                 cond: Box::new(cond.type_check(symbols)?),
                 then: Box::new(then.type_check(symbols)?),
                 else_: Box::new(else_.type_check(symbols)?),
             }),
+
+            Self::Cast { .. } => todo!(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Const {
+    Int(i32),
+    Long(i64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -66,7 +66,7 @@ fn parse_var_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, VarDecl, ParseError<'_>>
         (parse_ident, opt(preceded(tag_token!(Token::Equal), parse_expr))),
         tag_token!(Token::Semicolon),
     )
-    .map(|(name, init)| VarDecl { name, init, sc })
+    .map(|(name, init)| VarDecl { name, init, sc, var_type: todo!() })
     .parse_complete(i)
 }
 
@@ -91,7 +91,7 @@ fn parse_func_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, FuncDecl, ParseError<'_
     let (i, body) =
         parse_block.map(Some).or(tag_token!(Token::Semicolon => None)).parse_complete(i)?;
 
-    let func_def = FuncDecl { name, params, body, sc };
+    let func_def = FuncDecl { name, params, body, sc , fun_type: todo!()};
 
     Ok((i, func_def))
 }
@@ -303,7 +303,7 @@ fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
                 .map(|(name, args)| Expr::FuncCall { name, args }),
             // const
             tag_token!(Token::IntLiteral(_)).map_opt(|t: Tokens<'_>| {
-                if let Token::IntLiteral(i) = t.0[0] { Some(Expr::ConstInt(i)) } else { None }
+                if let Token::IntLiteral(i) = t.0[0] { Some(Expr::Const(Const::Int(i))) } else { None }
             }),
             // group
             delimited(tag_token!(Token::ParenOpen), parse_expr, tag_token!(Token::ParenClose)),

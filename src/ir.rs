@@ -1,6 +1,6 @@
 use crate::{
     assembly,
-    ast::{self, Namespace, StorageClass, TypeCtx},
+    ast::{self, Const, Namespace, StorageClass, TypeCtx},
 };
 use ecow::{EcoString as Ecow, eco_format};
 use either::Either::{Left, Right};
@@ -221,7 +221,7 @@ impl ToIr for ast::Stmt {
                 instrs.push(Instr::Label(brk_label(label)));
             }
             Self::Case { cnst, body, label: Some(label) } => {
-                let ast::Expr::ConstInt(value) = cnst else { unreachable!() };
+                let ast::Expr::Const(Const::Int(value)) = cnst else { unreachable!() };
                 instrs.push(Instr::Label(case_label(label, *value)));
 
                 body.to_ir(instrs);
@@ -298,7 +298,8 @@ impl ToIr for ast::Expr {
     type Output = Value;
     fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
         match self {
-            Self::ConstInt(i) => Value::Const(*i),
+            Self::Const(Const::Int(i)) => Value::Const(*i),
+            Self::Const(Const::Long(_)) => todo!(),
             Self::Unary(ast::UnaryOp::Plus, expr) => expr.to_ir(instrs),
             Self::Unary(
                 op @ (ast::UnaryOp::IncPost
@@ -393,6 +394,8 @@ impl ToIr for ast::Expr {
 
                 Value::Var(dst)
             }
+
+            Self::Cast { .. } => todo!()
         }
     }
 }

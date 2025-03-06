@@ -49,9 +49,9 @@ impl Program {
         for idx in 0..self.decls.len() {
             self.decls[idx] = self.decls[idx]
                 .clone()
-                .resolve_switch_statements()?
                 .resolve_identifiers(Scope::File, &mut id_map)?
                 .type_check(Scope::File, &mut self.symbols)?
+                .resolve_switch_statements()?
                 .resolve_goto_labels()?
                 .resolve_loop_labels()?;
         }
@@ -454,8 +454,9 @@ impl FuncDecl {
     }
 
     fn resolve_switch_statements(self) -> anyhow::Result<Self> {
+        let switch_type = Type::Int; // doesn't actually matter
         let body = match self.body {
-            Some(body) => Some(body.resolve_switch_statements(None)?),
+            Some(body) => Some(body.resolve_switch_statements(None, &switch_type)?),
             None => None,
         };
 
@@ -500,9 +501,13 @@ impl BlockItem {
         })
     }
 
-    fn resolve_switch_statements(self, in_switch: SwitchCtx) -> anyhow::Result<Self> {
+    fn resolve_switch_statements(
+        self,
+        switch_ctx: SwitchCtx,
+        switch_type: &Type,
+    ) -> anyhow::Result<Self> {
         Ok(match self {
-            Self::S(stmt) => Self::S(stmt.resolve_switch_statements(in_switch)?),
+            Self::S(stmt) => Self::S(stmt.resolve_switch_statements(switch_ctx, switch_type)?),
             Self::D(_) => self,
         })
     }
@@ -519,7 +524,7 @@ impl BlockItem {
     }
 }
 
-type SwitchCtx<'s> = Option<&'s mut FxHashSet<Option<i32>>>;
+type SwitchCtx<'s> = Option<&'s mut FxHashSet<Option<Const>>>;
 
 #[derive(Debug, Clone)]
 pub struct Block(pub Vec<BlockItem>);
@@ -560,17 +565,21 @@ impl Block {
         Ok(Self(acc))
     }
 
-    fn resolve_switch_statements(self, switch_ctx: SwitchCtx) -> anyhow::Result<Self> {
+    fn resolve_switch_statements(
+        self,
+        switch_ctx: SwitchCtx,
+        switch_type: &Type,
+    ) -> anyhow::Result<Self> {
         let mut acc = Vec::with_capacity(self.0.len());
 
         if let Some(switch_ctx) = switch_ctx {
             for bi in self.0 {
-                let bi = bi.resolve_switch_statements(Some(switch_ctx))?;
+                let bi = bi.resolve_switch_statements(Some(switch_ctx), switch_type)?;
                 acc.push(bi);
             }
         } else {
             for bi in self.0 {
-                let bi = bi.resolve_switch_statements(None)?;
+                let bi = bi.resolve_switch_statements(None, switch_type)?;
                 acc.push(bi);
             }
         }
@@ -689,7 +698,7 @@ pub enum Stmt {
         ctrl: TypedExpr,
         body: Box<Stmt>,
         label: Option<Ecow>,
-        cases: Vec<Option<i32>>,
+        cases: Vec<Option<Const>>,
     },
     Case {
         cnst: TypedExpr,
@@ -939,55 +948,75 @@ impl Stmt {
         }
     }
 
-    fn resolve_switch_statements(self, switch_ctx: SwitchCtx) -> anyhow::Result<Self> {
+    fn resolve_switch_statements(
+        self,
+        switch_ctx: SwitchCtx,
+        switch_type: &Type,
+    ) -> anyhow::Result<Self> {
         Ok(match self {
             Self::If { cond, then, else_ } => {
                 let mut switch_ctx = switch_ctx;
 
-                let then = Box::new(then.resolve_switch_statements(switch_ctx.as_deref_mut())?);
+                let then = Box::new(
+                    then.resolve_switch_statements(switch_ctx.as_deref_mut(), switch_type)?,
+                );
                 let else_ = match else_ {
-                    Some(e) => Some(Box::new(e.resolve_switch_statements(switch_ctx)?)),
+                    Some(e) => {
+                        Some(Box::new(e.resolve_switch_statements(switch_ctx, switch_type)?))
+                    }
                     None => None,
                 };
 
                 Self::If { cond, then, else_ }
             }
-            Self::Compound(block) => Self::Compound(block.resolve_switch_statements(switch_ctx)?),
+            Self::Compound(block) => {
+                Self::Compound(block.resolve_switch_statements(switch_ctx, switch_type)?)
+            }
             Self::While { cond, body, label } => {
-                let body = Box::new(body.resolve_switch_statements(switch_ctx)?);
+                let body = Box::new(body.resolve_switch_statements(switch_ctx, switch_type)?);
                 Self::While { cond, body, label }
             }
             Self::DoWhile { body, cond, label } => {
-                let body = Box::new(body.resolve_switch_statements(switch_ctx)?);
+                let body = Box::new(body.resolve_switch_statements(switch_ctx, switch_type)?);
                 Self::DoWhile { cond, body, label }
             }
             Self::For { init, cond, post, body, label } => {
-                let body = Box::new(body.resolve_switch_statements(switch_ctx)?);
+                let body = Box::new(body.resolve_switch_statements(switch_ctx, switch_type)?);
                 Self::For { init, cond, post, body, label }
             }
             Self::Label(label, stmt) => {
-                let stmt = Box::new(stmt.resolve_switch_statements(switch_ctx)?);
+                let stmt = Box::new(stmt.resolve_switch_statements(switch_ctx, switch_type)?);
                 Self::Label(label, stmt)
             }
 
             Self::Switch { ctrl, body, label, .. } => {
-                let mut switch_ctx = HashSet::default();
-                let body = Box::new(body.resolve_switch_statements(Some(&mut switch_ctx))?);
+                let switch_type = ctrl
+                    .clone()
+                    .ret
+                    .ok_or(anyhow::anyhow!("switch type must be kbown at this point"))?;
 
-                Self::Switch { ctrl, body, label, cases: switch_ctx.into_iter().collect() }
+                let mut switchctx = HashSet::default();
+                let body =
+                    Box::new(body.resolve_switch_statements(Some(&mut switchctx), &switch_type)?);
+
+                let cases = switchctx.into_iter().collect::<Vec<_>>();
+
+                Self::Switch { ctrl, body, label, cases }
             }
             Self::Case { cnst, body, label } => {
                 let switch_ctx = switch_ctx.ok_or(anyhow::anyhow!("case outside of a switch"))?;
 
-                let Expr::Const(Const::Int(value)) = cnst.expr else {
+                let Expr::Const(value) = cnst.expr else {
                     anyhow::bail!("case value not a constant");
                 };
+
+                let value = value.cast_const(switch_type);
 
                 if !switch_ctx.insert(Some(value)) {
                     anyhow::bail!("case value already exists");
                 };
 
-                let body = Box::new(body.resolve_switch_statements(Some(switch_ctx))?);
+                let body = Box::new(body.resolve_switch_statements(Some(switch_ctx), switch_type)?);
                 Self::Case { cnst, body, label }
             }
             Self::Default { body, label } => {
@@ -998,7 +1027,7 @@ impl Stmt {
                     anyhow::bail!("cdefault ase already exists");
                 };
 
-                let body = Box::new(body.resolve_switch_statements(Some(switch_ctx))?);
+                let body = Box::new(body.resolve_switch_statements(Some(switch_ctx), switch_type)?);
                 Self::Default { body, label }
             }
 
@@ -1137,6 +1166,14 @@ impl Expr {
             }
             Self::Assignemnt(_, _) => anyhow::bail!("left value isn't a variable"),
 
+            Self::Unary(op, expr)
+                if matches!(
+                    op,
+                    UnaryOp::IncPre | UnaryOp::IncPost | UnaryOp::DecPre | UnaryOp::DecPost
+                ) && !matches!(expr.expr, Expr::Var(_)) =>
+            {
+                anyhow::bail!("left value to increment/decrement isn't a variable");
+            }
             Self::Unary(op, expr) => Ok(Self::Unary(op, Box::new(expr.resolve_identifiers(map)?))),
 
             Self::Binary { op, lhs, rhs } => Ok(Self::Binary {
@@ -1145,6 +1182,9 @@ impl Expr {
                 rhs: Box::new(rhs.resolve_identifiers(map)?),
             }),
 
+            Self::CompoundAssignment { lhs, .. } if !matches!(lhs.expr, Expr::Var(_)) => {
+                anyhow::bail!("left value to compound assignment isn't a variable");
+            }
             Self::CompoundAssignment { op, lhs, rhs } => Ok(Self::CompoundAssignment {
                 op,
                 lhs: Box::new(lhs.resolve_identifiers(map)?),
@@ -1346,21 +1386,41 @@ impl Expr {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Const {
     Int(i32),
     Long(i64),
 }
 
+impl std::fmt::Display for Const {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Const::Int(i) => write!(f, "{i}"),
+            Const::Long(i) => write!(f, "{i}"),
+        }
+    }
+}
+
+#[allow(clippy::cast_possible_truncation)]
 impl Const {
     fn into_static_init(self, target_type: Type) -> StaticInit {
         match (self, target_type) {
             (_, Type::Func { .. }) => unreachable!(),
 
             (Const::Int(i), Type::Int) => StaticInit::Int(i),
-            (Const::Int(i), Type::Long) => StaticInit::Long(i as i64),
+            (Const::Int(i), Type::Long) => StaticInit::Long(i64::from(i)),
             (Const::Long(i), Type::Int) => StaticInit::Int(i as i32),
             (Const::Long(i), Type::Long) => StaticInit::Long(i),
+        }
+    }
+    fn cast_const(self, target_type: &Type) -> Self {
+        match (self, target_type) {
+            (_, Type::Func { .. }) => unreachable!(),
+
+            (Const::Int(i), Type::Int) => Self::Int(i),
+            (Const::Int(i), Type::Long) => Self::Long(i64::from(i)),
+            (Const::Long(i), Type::Int) => Self::Int(i as i32),
+            (Const::Long(i), Type::Long) => Self::Long(i),
         }
     }
 }

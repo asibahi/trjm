@@ -1,0 +1,148 @@
+======================================================================
+FAIL: test_invalid_semantics/extra_credit/compound_invalid_lvalue (test_framework.basic.TestChapter5.test_invalid_semantics/extra_credit/compound_invalid_lvalue)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 580, in test_invalid
+    self.compile_failure(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 334, in compile_failure
+    with self.assertRaises(
+         ~~~~~~~~~~~~~~~~~^
+        subprocess.CalledProcessError, msg=f"Didn't catch error in {source_file}"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ):
+    ^
+AssertionError: Didn't catch error in /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_5/invalid_semantics/extra_credit/compound_invalid_lvalue.c
+
+======================================================================
+FAIL: test_invalid_semantics/extra_credit/compound_invalid_lvalue_2 (test_framework.basic.TestChapter5.test_invalid_semantics/extra_credit/compound_invalid_lvalue_2)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 580, in test_invalid
+    self.compile_failure(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 334, in compile_failure
+    with self.assertRaises(
+         ~~~~~~~~~~~~~~~~~^
+        subprocess.CalledProcessError, msg=f"Didn't catch error in {source_file}"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ):
+    ^
+AssertionError: Didn't catch error in /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_5/invalid_semantics/extra_credit/compound_invalid_lvalue_2.c
+
+======================================================================
+FAIL: test_invalid_semantics/extra_credit/postfix_decr_non_lvalue (test_framework.basic.TestChapter5.test_invalid_semantics/extra_credit/postfix_decr_non_lvalue)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 580, in test_invalid
+    self.compile_failure(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 334, in compile_failure
+    with self.assertRaises(
+         ~~~~~~~~~~~~~~~~~^
+        subprocess.CalledProcessError, msg=f"Didn't catch error in {source_file}"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ):
+    ^
+AssertionError: Didn't catch error in /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_5/invalid_semantics/extra_credit/postfix_decr_non_lvalue.c
+
+======================================================================
+FAIL: test_invalid_semantics/extra_credit/postfix_incr_non_lvalue (test_framework.basic.TestChapter5.test_invalid_semantics/extra_credit/postfix_incr_non_lvalue)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 580, in test_invalid
+    self.compile_failure(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 334, in compile_failure
+    with self.assertRaises(
+         ~~~~~~~~~~~~~~~~~^
+        subprocess.CalledProcessError, msg=f"Didn't catch error in {source_file}"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ):
+    ^
+AssertionError: Didn't catch error in /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_5/invalid_semantics/extra_credit/postfix_incr_non_lvalue.c
+
+======================================================================
+FAIL: test_invalid_semantics/extra_credit/prefix_decr_non_lvalue (test_framework.basic.TestChapter5.test_invalid_semantics/extra_credit/prefix_decr_non_lvalue)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 580, in test_invalid
+    self.compile_failure(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 334, in compile_failure
+    with self.assertRaises(
+         ~~~~~~~~~~~~~~~~~^
+        subprocess.CalledProcessError, msg=f"Didn't catch error in {source_file}"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ):
+    ^
+AssertionError: Didn't catch error in /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_5/invalid_semantics/extra_credit/prefix_decr_non_lvalue.c
+
+======================================================================
+FAIL: test_invalid_semantics/extra_credit/prefix_incr_non_lvalue (test_framework.basic.TestChapter5.test_invalid_semantics/extra_credit/prefix_incr_non_lvalue)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 580, in test_invalid
+    self.compile_failure(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 334, in compile_failure
+    with self.assertRaises(
+         ~~~~~~~~~~~~~~~~~^
+        subprocess.CalledProcessError, msg=f"Didn't catch error in {source_file}"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ):
+    ^
+AssertionError: Didn't catch error in /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_5/invalid_semantics/extra_credit/prefix_incr_non_lvalue.c
+
+======================================================================
+FAIL: test_invalid_declarations/extra_credit/compound_assign_to_fun_call (test_framework.basic.TestChapter9.test_invalid_declarations/extra_credit/compound_assign_to_fun_call)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 580, in test_invalid
+    self.compile_failure(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 334, in compile_failure
+    with self.assertRaises(
+         ~~~~~~~~~~~~~~~~~^
+        subprocess.CalledProcessError, msg=f"Didn't catch error in {source_file}"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ):
+    ^
+AssertionError: Didn't catch error in /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_9/invalid_declarations/extra_credit/compound_assign_to_fun_call.c
+
+======================================================================
+FAIL: test_invalid_declarations/extra_credit/decrement_fun_call (test_framework.basic.TestChapter9.test_invalid_declarations/extra_credit/decrement_fun_call)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 580, in test_invalid
+    self.compile_failure(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 334, in compile_failure
+    with self.assertRaises(
+         ~~~~~~~~~~~~~~~~~^
+        subprocess.CalledProcessError, msg=f"Didn't catch error in {source_file}"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ):
+    ^
+AssertionError: Didn't catch error in /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_9/invalid_declarations/extra_credit/decrement_fun_call.c
+
+======================================================================
+FAIL: test_invalid_declarations/extra_credit/increment_fun_call (test_framework.basic.TestChapter9.test_invalid_declarations/extra_credit/increment_fun_call)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 580, in test_invalid
+    self.compile_failure(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 334, in compile_failure
+    with self.assertRaises(
+         ~~~~~~~~~~~~~~~~~^
+        subprocess.CalledProcessError, msg=f"Didn't catch error in {source_file}"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ):
+    ^
+AssertionError: Didn't catch error in /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_9/invalid_declarations/extra_credit/increment_fun_call.c
+
+----------------------------------------------------------------------
+Ran 598 tests in 74.540s
+
+FAILED (failures=9)

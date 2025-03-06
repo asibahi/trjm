@@ -200,7 +200,7 @@ impl ToIr for ast::Stmt {
                     instrs.extend([
                         Instr::Binary {
                             op: BinOp::Equal,
-                            lhs: Value::Const(v),
+                            lhs: todo!(),
                             rhs: ctrl.clone(),
                             dst: dst.clone(),
                         },
@@ -220,7 +220,7 @@ impl ToIr for ast::Stmt {
                 instrs.push(Instr::Label(brk_label(label)));
             }
             Self::Case { cnst, body, label: Some(label) } => {
-                let ast::Expr::Const(Const::Int(value)) = cnst.expr else { unreachable!() };
+                let ast::Expr::Const(value) = cnst.expr else { unreachable!() };
                 instrs.push(Instr::Label(case_label(label, value)));
 
                 body.to_ir(instrs);

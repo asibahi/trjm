@@ -221,8 +221,8 @@ impl ToIr for ast::Stmt {
                 instrs.push(Instr::Label(brk_label(label)));
             }
             Self::Case { cnst, body, label: Some(label) } => {
-                let ast::Expr::Const(Const::Int(value)) = cnst else { unreachable!() };
-                instrs.push(Instr::Label(case_label(label, *value)));
+                let ast::Expr::Const(Const::Int(value)) = cnst.expr else { unreachable!() };
+                instrs.push(Instr::Label(case_label(label, value)));
 
                 body.to_ir(instrs);
             }
@@ -294,6 +294,14 @@ impl ToIr for ast::Stmt {
         }
     }
 }
+impl ToIr for ast::TypedExpr {
+    type Output = Value;
+
+    fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
+        todo!()
+    }
+}
+
 impl ToIr for ast::Expr {
     type Output = Value;
     fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
@@ -307,7 +315,7 @@ impl ToIr for ast::Expr {
                 | ast::UnaryOp::IncPre
                 | ast::UnaryOp::DecPre),
                 expr,
-            ) => postfix_prefix_instrs(instrs, *op, expr),
+            ) => postfix_prefix_instrs(instrs, *op, /*expr*/ todo!()),
             Self::Unary(unary_op, expr) => {
                 let src = expr.to_ir(instrs);
 
@@ -320,7 +328,7 @@ impl ToIr for ast::Expr {
                 Value::Var(dst)
             }
             Self::Binary { op: op @ (ast::BinaryOp::And | ast::BinaryOp::Or), lhs, rhs } => {
-                logical_ops_instrs(instrs, *op, lhs, rhs)
+                logical_ops_instrs(instrs, *op, /*lhs, rhs*/ todo!(), todo!())
             }
             Self::Binary { op, lhs, rhs } => {
                 let lhs = lhs.to_ir(instrs);
@@ -336,7 +344,8 @@ impl ToIr for ast::Expr {
             }
             Self::Var(id) => Value::Var(Place(id.clone())),
             Self::Assignemnt(place, value) => {
-                let ast::Expr::Var(ref dst) = **place else {
+                // todo double check
+                let ast::Expr::Var(ref dst) = place.expr else {
                     unreachable!("place expression should be resolved earlier.")
                 };
 
@@ -347,7 +356,8 @@ impl ToIr for ast::Expr {
                 Value::Var(Place(dst.clone()))
             }
             Self::CompoundAssignment { op, lhs, rhs } => {
-                let ast::Expr::Var(ref dst) = **lhs else {
+                // todo double check
+                let ast::Expr::Var(ref dst) = lhs.expr else {
                     unreachable!("place expression should be resolved earlier.")
                 };
                 let ret =
@@ -395,13 +405,12 @@ impl ToIr for ast::Expr {
                 Value::Var(dst)
             }
 
-            Self::Cast { .. } => todo!()
+            Self::Cast { .. } => todo!(),
         }
     }
 }
 
 fn postfix_prefix_instrs(instrs: &mut Vec<Instr>, op: ast::UnaryOp, expr: &ast::Expr) -> Value {
-
     let ast::Expr::Var(ref dst) = *expr else {
         unreachable!("place expression should be resolved earlier.")
     };

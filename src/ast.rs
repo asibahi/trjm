@@ -64,6 +64,7 @@ pub enum Type {
     Int,
     Long,
     Func { params: Vec<Type>, ret: Box<Type> },
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,14 +162,14 @@ impl Decl {
 #[derive(Debug, Clone)]
 pub struct VarDecl {
     pub name: Ecow,
-    pub init: Option<Expr>,
+    pub init: Option<TypedExpr>,
     pub sc: StorageClass,
     pub var_type: Type,
 }
 impl VarDecl {
     fn type_check_file(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
         let mut init = match self.init {
-            Some(Expr::Const(Const::Int(i))) => InitValue::Initial(i),
+            Some(TypedExpr { expr: Expr::Const(Const::Int(i)), .. }) => InitValue::Initial(i),
             None if self.sc == StorageClass::Extern => InitValue::None,
             None => InitValue::Tentative,
             _ => anyhow::bail!("non-constant initializer"),
@@ -235,7 +236,9 @@ impl VarDecl {
             },
             StorageClass::Static => {
                 let init_value = match self.init.take() {
-                    Some(Expr::Const(Const::Int(i))) => InitValue::Initial(i),
+                    Some(TypedExpr { expr: Expr::Const(Const::Int(i)), .. }) => {
+                        InitValue::Initial(i)
+                    }
                     None => InitValue::Initial(0),
                     _ => {
                         anyhow::bail!("non-constant initializer on local static variable");
@@ -263,7 +266,7 @@ impl VarDecl {
             }
         }
 
-        Ok(Self { name: self.name, init: self.init, sc: self.sc, var_type: todo!() })
+        Ok(self)
     }
 
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {
@@ -294,7 +297,7 @@ impl VarDecl {
         let init =
             if let Some(init) = self.init { Some(init.resolve_identifiers(map)?) } else { None };
 
-        Ok(VarDecl { name, init, sc, var_type: todo!() })
+        Ok(VarDecl { name, init, sc, var_type: self.var_type })
     }
 }
 
@@ -371,18 +374,20 @@ impl FuncDecl {
             anyhow::bail!("duplicate declaration. listing 9-19");
         };
 
+        let Type::Func { params: ref params_type, .. } = self.fun_type else { unreachable!() };
+
         let mut inner_map = map
             .iter()
             .map(|(k, idctx)| (k.clone(), IdCtx { in_current_scope: false, ..idctx.clone() }))
             .collect();
 
         let mut params = Vec::with_capacity(self.params.len());
-        for param in self.params {
+        for (name, ty) in self.params.iter().zip(params_type) {
             let VarDecl { name, .. } = (VarDecl {
-                name: param.clone(),
+                name: name.clone(),
                 init: None,
                 sc: StorageClass::None,
-                var_type: todo!(),
+                var_type: ty.clone(),
             })
             .resolve_identifiers(&mut inner_map)?;
 
@@ -394,7 +399,7 @@ impl FuncDecl {
             None => None,
         };
 
-        Ok(Self { name: self.name, params, body, sc: self.sc, fun_type: todo!() })
+        Ok(Self { name: self.name, params, body, sc: self.sc, fun_type: self.fun_type })
     }
 
     fn resolve_goto_labels(self) -> anyhow::Result<Self> {
@@ -409,7 +414,13 @@ impl FuncDecl {
             anyhow::bail!("goto label already exists in function");
         };
 
-        Ok(Self { name: self.name, body, params: self.params, sc: self.sc, fun_type: todo!() })
+        Ok(Self {
+            name: self.name,
+            body,
+            params: self.params,
+            sc: self.sc,
+            fun_type: self.fun_type,
+        })
     }
 
     fn resolve_loop_labels(self) -> anyhow::Result<Self> {
@@ -418,7 +429,13 @@ impl FuncDecl {
             None => None,
         };
 
-        Ok(Self { name: self.name, body, params: self.params, sc: self.sc, fun_type: todo!() })
+        Ok(Self {
+            name: self.name,
+            body,
+            params: self.params,
+            sc: self.sc,
+            fun_type: self.fun_type,
+        })
     }
 
     fn resolve_switch_statements(self) -> anyhow::Result<Self> {
@@ -427,7 +444,13 @@ impl FuncDecl {
             None => None,
         };
 
-        Ok(Self { name: self.name, body, params: self.params, sc: self.sc, fun_type: todo!() })
+        Ok(Self {
+            name: self.name,
+            body,
+            params: self.params,
+            sc: self.sc,
+            fun_type: self.fun_type,
+        })
     }
 }
 
@@ -604,10 +627,10 @@ impl LoopKind {
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
-    Return(Expr),
-    Expression(Expr),
+    Return(TypedExpr),
+    Expression(TypedExpr),
     If {
-        cond: Expr,
+        cond: TypedExpr,
         then: Box<Stmt>,
         else_: Option<Box<Stmt>>,
     },
@@ -617,19 +640,19 @@ pub enum Stmt {
     Break(Option<Ecow>),
     Continue(Option<Ecow>),
     While {
-        cond: Expr,
+        cond: TypedExpr,
         body: Box<Stmt>,
         label: Option<Ecow>,
     },
     DoWhile {
         body: Box<Stmt>,
-        cond: Expr,
+        cond: TypedExpr,
         label: Option<Ecow>,
     },
     For {
-        init: Either<VarDecl, Option<Expr>>,
-        cond: Option<Expr>,
-        post: Option<Expr>,
+        init: Either<VarDecl, Option<TypedExpr>>,
+        cond: Option<TypedExpr>,
+        post: Option<TypedExpr>,
 
         body: Box<Stmt>,
         label: Option<Ecow>,
@@ -640,13 +663,13 @@ pub enum Stmt {
     Label(Ecow, Box<Stmt>),
 
     Switch {
-        ctrl: Expr,
+        ctrl: TypedExpr,
         body: Box<Stmt>,
         label: Option<Ecow>,
         cases: Vec<Option<i32>>,
     },
     Case {
-        cnst: Expr,
+        cnst: TypedExpr,
         body: Box<Stmt>,
         label: Option<Ecow>,
     },
@@ -933,7 +956,7 @@ impl Stmt {
             Self::Case { cnst, body, label } => {
                 let switch_ctx = switch_ctx.ok_or(anyhow::anyhow!("case outside of a switch"))?;
 
-                let Expr::Const(Const::Int(value)) = cnst else {
+                let Expr::Const(Const::Int(value)) = cnst.expr else {
                     anyhow::bail!("case value not a constant");
                 };
 
@@ -1029,24 +1052,48 @@ impl Stmt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypedExpr {
+    pub expr: Expr,
+    pub ret: Type,
+}
+impl TypedExpr {
+    fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {
+        Ok(Self { expr: self.expr.resolve_identifiers(map)?, ret: self.ret })
+    }
+
+    fn type_check(self, _symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
+        todo!()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Const(Const),
     Var(Ecow),
-    Cast { to: Type, from: Box<Expr> },
-    Unary(UnaryOp, Box<Expr>),
-    Binary { op: BinaryOp, lhs: Box<Expr>, rhs: Box<Expr> },
-    CompoundAssignment { op: BinaryOp, lhs: Box<Expr>, rhs: Box<Expr> },
-    Assignemnt(Box<Expr>, Box<Expr>),
-    Conditional { cond: Box<Expr>, then: Box<Expr>, else_: Box<Expr> },
-    FuncCall { name: Ecow, args: Vec<Expr> },
+    Cast { to: Type, from: Box<TypedExpr> },
+    Unary(UnaryOp, Box<TypedExpr>),
+    Binary { op: BinaryOp, lhs: Box<TypedExpr>, rhs: Box<TypedExpr> },
+    CompoundAssignment { op: BinaryOp, lhs: Box<TypedExpr>, rhs: Box<TypedExpr> },
+    Assignemnt(Box<TypedExpr>, Box<TypedExpr>),
+    Conditional { cond: Box<TypedExpr>, then: Box<TypedExpr>, else_: Box<TypedExpr> },
+    FuncCall { name: Ecow, args: Vec<TypedExpr> },
 }
 impl Expr {
+    pub fn dummy_typed(self) -> TypedExpr {
+        TypedExpr { expr: self, ret: Type::Unknown }
+    }
+    pub fn typed(self, ty: Type) -> TypedExpr {
+        TypedExpr { expr: self, ret: ty }
+    }
+
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {
         match self {
-            Self::Assignemnt(left, right) if matches!(*left, Expr::Var(_)) => Ok(Self::Assignemnt(
-                Box::new(left.resolve_identifiers(map)?),
-                Box::new(right.resolve_identifiers(map)?),
-            )),
+            Self::Assignemnt(left, right) if matches!(left.expr, Expr::Var(_)) => {
+                Ok(Self::Assignemnt(
+                    Box::new(left.resolve_identifiers(map)?),
+                    Box::new(right.resolve_identifiers(map)?),
+                ))
+            }
             Self::Assignemnt(_, _) => anyhow::bail!("left value isn't a variable"),
 
             Self::Unary(op, expr) => Ok(Self::Unary(op, Box::new(expr.resolve_identifiers(map)?))),
@@ -1090,7 +1137,10 @@ impl Expr {
 
                 Ok(Self::FuncCall { name, args: resolved_args })
             }
-            Self::Cast { .. } => todo!(),
+            Self::Cast { to, from } => {
+                let from = Box::new(from.resolve_identifiers(map)?);
+                Ok(Self::Cast { to, from })
+            }
         }
     }
 

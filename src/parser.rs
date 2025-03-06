@@ -228,7 +228,7 @@ fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
 
 enum BinKind {
     Typical(BinaryOp),
-    Ternary(Expr),
+    Ternary(TypedExpr),
     Assignment,
     CompoundAssignment(BinaryOp),
 }
@@ -336,7 +336,7 @@ fn parse_infixes(i: Tokens<'_>) -> IResult<Tokens<'_>, Binary<BinKind, i32>, Par
     .parse_complete(i)
 }
 
-fn parse_operands(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
+fn parse_operands(i: Tokens<'_>) -> IResult<Tokens<'_>, TypedExpr, ParseError<'_>> {
     alt((
         // function call
         parse_ident
@@ -345,24 +345,24 @@ fn parse_operands(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
                 separated_list0(tag_token!(Token::Comma), parse_expr),
                 tag_token!(Token::ParenClose),
             ))
-            .map(|(name, args)| Expr::FuncCall { name, args }),
+            .map(|(name, args)| Expr::FuncCall { name, args }.dummy_typed()),
         // const
         tag_token!(Token::IntLiteral(_) | Token::LongLiteral(_)).map_opt(|t: Tokens<'_>| {
             match t.0[0] {
-                Token::IntLiteral(i) => Some(Expr::Const(Const::Int(i))),
-                Token::LongLiteral(i) => Some(Expr::Const(Const::Long(i))),
+                Token::IntLiteral(i) => Some(Expr::Const(Const::Int(i)).typed(Type::Int)),
+                Token::LongLiteral(i) => Some(Expr::Const(Const::Long(i)).typed(Type::Long)),
                 _ => None,
             }
         }),
         // group
         delimited(tag_token!(Token::ParenOpen), parse_expr, tag_token!(Token::ParenClose)),
         // variable
-        parse_ident.map(Expr::Var),
+        parse_ident.map(Expr::Var).map(Expr::dummy_typed),
     ))
     .parse_complete(i)
 }
 
-fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
+fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, TypedExpr, ParseError<'_>> {
     // precedence reference:
     // https://en.cppreference.com/w/c/language/operator_precedence
 
@@ -372,27 +372,26 @@ fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
         parse_infixes,
         parse_operands,
         // fold
-        |op| -> Result<Expr, ()> {
+        |op| -> Result<TypedExpr, ()> {
+            use Operation::*;
             Ok(match op {
-                Operation::Prefix(Left(op), exp) | Operation::Postfix(exp, op) => {
-                    Expr::Unary(op, Box::new(exp))
-                }
-                Operation::Prefix(Right(ty), exp) => Expr::Cast { to: ty, from: Box::new(exp) },
-                Operation::Binary(lhs, Typical(op), rhs) => {
+                Prefix(Left(op), exp) | Postfix(exp, op) => Expr::Unary(op, Box::new(exp)),
+                Prefix(Right(ty), exp) => Expr::Cast { to: ty, from: Box::new(exp) },
+                Binary(lhs, Typical(op), rhs) => {
                     Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }
                 }
-                Operation::Binary(lhs, CompoundAssignment(op), rhs) => {
+                Binary(lhs, CompoundAssignment(op), rhs) => {
                     Expr::CompoundAssignment { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }
                 }
-                Operation::Binary(lhs, Assignment, rhs) => {
-                    Expr::Assignemnt(Box::new(lhs), Box::new(rhs))
-                }
-                Operation::Binary(lhs, Ternary(op), rhs) => Expr::Conditional {
+                Binary(lhs, Assignment, rhs) => Expr::Assignemnt(Box::new(lhs), Box::new(rhs)),
+                Binary(lhs, Ternary(op), rhs) => Expr::Conditional {
                     cond: Box::new(lhs),
                     then: Box::new(op),
                     else_: Box::new(rhs),
                 },
-            })
+            }
+            // apparently it is a bad idea to infer types here.
+            .dummy_typed())
         },
     )(i)
 }

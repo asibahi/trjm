@@ -1,7 +1,4 @@
-use crate::{
-    assembly,
-    ast::{self, Const, Namespace, StorageClass, TypeCtx},
-};
+use crate::ast::{self, Const, Namespace, StaticInit, StorageClass, Type, TypeCtx};
 use ecow::{EcoString as Ecow, eco_format};
 use either::Either::{Left, Right};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
@@ -17,12 +14,14 @@ pub struct Program {
 #[derive(Debug, Clone)]
 pub enum TopLevel {
     Function { name: Ecow, global: bool, params: Vec<Ecow>, body: Vec<Instr> },
-    StaticVar { name: Ecow, global: bool, init: i32 },
+    StaticVar { name: Ecow, global: bool, type_: Type, init: StaticInit },
 }
 
 #[derive(Debug, Clone)]
 pub enum Instr {
     Return(Value),
+    SignExtend { src: Value, dst: Place },
+    Truncate { src: Value, dst: Place },
     Unary { op: UnOp, src: Value, dst: Place },
     Binary { op: BinOp, lhs: Value, rhs: Value, dst: Place },
     Copy { src: Value, dst: Place },
@@ -35,7 +34,7 @@ pub enum Instr {
 
 #[derive(Debug, Clone)]
 pub enum Value {
-    Const(i32),
+    Const(Const),
     Var(Place),
 }
 
@@ -74,17 +73,8 @@ pub enum BinOp {
 
 // ======
 
-pub trait ToIr {
-    type Output: assembly::ToAsm;
-    fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output;
-}
-impl ToIr for () {
-    type Output = ();
-    fn to_ir(&self, _: &mut Vec<Instr>) -> Self::Output {}
-}
-impl ToIr for ast::Program {
-    type Output = Program;
-    fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
+impl ast::Program {
+    pub fn to_ir(&self, instrs: &mut Vec<Instr>, symbols: &mut Namespace<TypeCtx>) -> Program {
         //
         // traverse AST
         let mut top_level = self
@@ -92,36 +82,50 @@ impl ToIr for ast::Program {
             .iter()
             .filter_map(|decl| -> Option<TopLevel> {
                 match decl {
-                    ast::Decl::Func(fun) => fun.body.as_ref().map(|_| fun.to_ir(instrs)),
+                    ast::Decl::Func(fun) => fun.body.as_ref().map(|_| fun.to_ir(instrs, symbols)),
                     ast::Decl::Var(_) => None,
                 }
             })
             .collect::<Vec<_>>();
 
         // traverse symbol table
-        top_level.extend(self.symbols.iter().filter_map(|(name, type_ctx)| match type_ctx.attr {
+        top_level.extend(symbols.iter().filter_map(|(name, type_ctx)| match type_ctx.attr {
             ast::Attributes::Static { init, global } => match init {
-                ast::Tentative => Some(TopLevel::StaticVar { name: name.clone(), global, init: 0 }),
-                ast::Initial(ast::StaticInit::Int(i)) => {
-                    Some(TopLevel::StaticVar { name: name.clone(), global, init: i })
-                }
-                ast::Initial(ast::StaticInit::Long(_)) => todo!(),
+                ast::Tentative => Some(TopLevel::StaticVar {
+                    name: name.clone(),
+                    global,
+                    init: type_ctx.type_.zeroed_static(),
+                    type_: type_ctx.type_.clone(),
+                }),
+                ast::Initial(init) => Some(TopLevel::StaticVar {
+                    name: name.clone(),
+                    global,
+                    init,
+                    type_: type_ctx.type_.clone(),
+                }),
+
                 ast::NoInit => None,
             },
             _ => None,
         }));
 
-        Program { top_level, symbols: self.symbols.clone() }
+        Program { top_level, symbols: std::mem::take(symbols) }
     }
 }
-impl ToIr for ast::FuncDecl {
-    type Output = TopLevel;
-    fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
+
+fn make_ir_variable(prefix: &'static str, type_: Type, symbols: &mut Namespace<TypeCtx>) -> Place {
+    let tmp_name = eco_format!("{prefix}.{}", GEN.fetch_add(1, Relaxed));
+    symbols.insert(tmp_name.clone(), TypeCtx { type_, attr: ast::Attributes::Local });
+    Place(tmp_name)
+}
+
+impl ast::FuncDecl {
+    fn to_ir(&self, instrs: &mut Vec<Instr>, symbols: &mut Namespace<TypeCtx>) -> TopLevel {
         let Some(ref body) = self.body else { unreachable!() };
-        body.to_ir(instrs);
+        body.to_ir(instrs, symbols);
 
         if !matches!(instrs.last(), Some(Instr::Return(_))) {
-            instrs.push(Instr::Return(Value::Const(0)));
+            instrs.push(Instr::Return(Value::Const(Const::Int(0))));
         }
 
         TopLevel::Function {
@@ -132,10 +136,9 @@ impl ToIr for ast::FuncDecl {
         }
     }
 }
-impl ToIr for ast::Stmt {
-    type Output = ();
+impl ast::Stmt {
     #[expect(clippy::too_many_lines)]
-    fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
+    fn to_ir(&self, instrs: &mut Vec<Instr>, symbols: &mut Namespace<TypeCtx>) {
         let goto_label = |s| eco_format!("goto.{s}");
 
         let brk_label = |s| eco_format!("brk.{s}");
@@ -146,22 +149,22 @@ impl ToIr for ast::Stmt {
 
         match self {
             Self::Return(expr) => {
-                let dst = expr.to_ir(instrs);
+                let dst = expr.to_ir(instrs, symbols);
                 instrs.push(Instr::Return(dst));
             }
             Self::Expression(expr) => {
-                expr.to_ir(instrs);
+                expr.to_ir(instrs, symbols);
             }
             Self::If { cond, then, else_ } => {
                 let counter = GEN.fetch_add(1, Relaxed);
 
                 let else_label = eco_format!("else.{}", counter);
 
-                let cond = cond.to_ir(instrs);
+                let cond = cond.to_ir(instrs, symbols);
                 // Do I need Copy Instr here ?
                 instrs.push(Instr::JumpIfZero { cond, target: else_label.clone() });
 
-                then.to_ir(instrs);
+                then.to_ir(instrs, symbols);
 
                 if let Some(else_) = else_ {
                     let end_label = eco_format!("end.{}", counter);
@@ -171,7 +174,7 @@ impl ToIr for ast::Stmt {
                         Instr::Label(else_label),
                     ]);
 
-                    else_.to_ir(instrs);
+                    else_.to_ir(instrs, symbols);
 
                     instrs.push(Instr::Label(end_label));
                 } else {
@@ -179,28 +182,32 @@ impl ToIr for ast::Stmt {
                 }
             }
 
-            Self::Compound(b) => b.to_ir(instrs),
+            Self::Compound(b) => b.to_ir(instrs, symbols),
 
             Self::GoTo(label) => {
                 instrs.push(Instr::Jump { target: goto_label(label) });
             }
             Self::Label(label, stmt) => {
                 instrs.push(Instr::Label(goto_label(label)));
-                stmt.to_ir(instrs);
+                stmt.to_ir(instrs, symbols);
             }
 
             Self::Null => {}
 
             Self::Switch { ctrl, body, label: Some(label), cases } => {
-                let dst = Place(eco_format!("swch{}", GEN.fetch_add(1, Relaxed)));
+                let dst = make_ir_variable(
+                    "swch",
+                    ctrl.ret.clone().expect("switch type must be known"),
+                    symbols,
+                );
 
-                let ctrl = ctrl.to_ir(instrs);
+                let ctrl = ctrl.to_ir(instrs, symbols);
 
                 for v in cases.iter().filter_map(|c| *c) {
                     instrs.extend([
                         Instr::Binary {
                             op: BinOp::Equal,
-                            lhs: todo!(),
+                            lhs: Value::Const(v),
                             rhs: ctrl.clone(),
                             dst: dst.clone(),
                         },
@@ -216,19 +223,19 @@ impl ToIr for ast::Stmt {
                     instrs.push(Instr::Jump { target: brk_label(label) });
                 }
 
-                body.to_ir(instrs);
+                body.to_ir(instrs, symbols);
                 instrs.push(Instr::Label(brk_label(label)));
             }
             Self::Case { cnst, body, label: Some(label) } => {
                 let ast::Expr::Const(value) = cnst.expr else { unreachable!() };
                 instrs.push(Instr::Label(case_label(label, value)));
 
-                body.to_ir(instrs);
+                body.to_ir(instrs, symbols);
             }
             Self::Default { body, label: Some(label) } => {
                 instrs.push(Instr::Label(dfl_label(label)));
 
-                body.to_ir(instrs);
+                body.to_ir(instrs, symbols);
             }
 
             Self::Break(Some(label)) => {
@@ -241,10 +248,10 @@ impl ToIr for ast::Stmt {
                 let start_label = eco_format!("strt.{label}");
 
                 instrs.push(Instr::Label(start_label.clone()));
-                body.to_ir(instrs);
+                body.to_ir(instrs, symbols);
 
                 instrs.push(Instr::Label(cntn_label(label)));
-                let cond = cond.to_ir(instrs);
+                let cond = cond.to_ir(instrs, symbols);
 
                 instrs.extend([
                     Instr::JumpIfNotZero { cond, target: start_label },
@@ -256,9 +263,9 @@ impl ToIr for ast::Stmt {
                 let end_label = brk_label(label);
                 instrs.push(Instr::Label(start_label.clone()));
 
-                let cond = cond.to_ir(instrs);
+                let cond = cond.to_ir(instrs, symbols);
                 instrs.push(Instr::JumpIfZero { cond, target: end_label.clone() });
-                body.to_ir(instrs);
+                body.to_ir(instrs, symbols);
 
                 instrs.extend([Instr::Jump { target: start_label }, Instr::Label(end_label)]);
             }
@@ -268,23 +275,23 @@ impl ToIr for ast::Stmt {
                 let brk_label = brk_label(label);
 
                 match init {
-                    Left(decl) => decl.to_ir(instrs),
-                    Right(Some(expr)) => drop(expr.to_ir(instrs)),
+                    Left(decl) => decl.to_ir(instrs, symbols),
+                    Right(Some(expr)) => drop(expr.to_ir(instrs, symbols)),
                     Right(None) => (),
                 }
 
                 instrs.push(Instr::Label(start_label.clone()));
 
                 if let Some(cond) = cond {
-                    let cond = cond.to_ir(instrs);
+                    let cond = cond.to_ir(instrs, symbols);
                     instrs.push(Instr::JumpIfZero { cond, target: brk_label.clone() });
                 }
 
-                body.to_ir(instrs);
+                body.to_ir(instrs, symbols);
 
                 instrs.push(Instr::Label(cntn_label.clone()));
                 if let Some(post) = post {
-                    post.to_ir(instrs);
+                    post.to_ir(instrs, symbols);
                 }
 
                 instrs.extend([Instr::Jump { target: start_label }, Instr::Label(brk_label)]);
@@ -293,50 +300,55 @@ impl ToIr for ast::Stmt {
         }
     }
 }
-impl ToIr for ast::TypedExpr {
-    type Output = Value;
-
-    fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
-        todo!()
+impl ast::TypedExpr {
+    fn to_ir(&self, instrs: &mut Vec<Instr>, symbols: &mut Namespace<TypeCtx>) -> Value {
+        self.expr.to_ir(instrs, symbols, self.ret.as_ref().expect("expr type is known"))
     }
 }
 
-impl ToIr for ast::Expr {
-    type Output = Value;
-    fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
+impl ast::Expr {
+    fn to_ir(
+        &self,
+        instrs: &mut Vec<Instr>,
+        symbols: &mut Namespace<TypeCtx>,
+        expr_type: &Type,
+    ) -> Value {
         match self {
-            Self::Const(Const::Int(i)) => Value::Const(*i),
-            Self::Const(Const::Long(_)) => todo!(),
-            Self::Unary(ast::UnaryOp::Plus, expr) => expr.to_ir(instrs),
+            Self::Const(i) => Value::Const(*i),
+
+            Self::Unary(ast::UnaryOp::Plus, expr) => expr.to_ir(instrs, symbols),
             Self::Unary(
                 op @ (ast::UnaryOp::IncPost
                 | ast::UnaryOp::DecPost
                 | ast::UnaryOp::IncPre
                 | ast::UnaryOp::DecPre),
                 expr,
-            ) => postfix_prefix_instrs(instrs, *op, /*expr*/ todo!()),
+            ) => postfix_prefix_instrs(instrs, symbols, *op, expr, expr_type),
             Self::Unary(unary_op, expr) => {
-                let src = expr.to_ir(instrs);
+                let src = expr.to_ir(instrs, symbols);
 
-                let dst_name = eco_format!("1op{}", GEN.fetch_add(1, Relaxed));
-                let dst = Place(dst_name);
-                let op = unary_op.to_ir(instrs);
+                let dst = make_ir_variable(
+                    "1op",
+                    expr.ret.clone().expect("unop type must be known"),
+                    symbols,
+                );
+
+                let op = unary_op.to_ir();
 
                 instrs.push(Instr::Unary { op, src, dst: dst.clone() });
 
                 Value::Var(dst)
             }
             Self::Binary { op: op @ (ast::BinaryOp::And | ast::BinaryOp::Or), lhs, rhs } => {
-                logical_ops_instrs(instrs, *op, /*lhs, rhs*/ todo!(), todo!())
+                logical_ops_instrs(instrs, symbols, *op, lhs, rhs, expr_type)
             }
             Self::Binary { op, lhs, rhs } => {
-                let lhs = lhs.to_ir(instrs);
-                let rhs = rhs.to_ir(instrs);
+                let lhs = lhs.to_ir(instrs, symbols);
+                let rhs = rhs.to_ir(instrs, symbols);
 
-                let dst_name = eco_format!("2nop{}", GEN.fetch_add(1, Relaxed));
-                let dst = Place(dst_name);
+                let dst = make_ir_variable("2op", expr_type.clone(), symbols);
 
-                let op = op.to_ir(instrs);
+                let op = op.to_ir();
 
                 instrs.push(Instr::Binary { op, lhs, rhs, dst: dst.clone() });
                 Value::Var(dst)
@@ -348,7 +360,7 @@ impl ToIr for ast::Expr {
                     unreachable!("place expression should be resolved earlier.")
                 };
 
-                let rhs = value.to_ir(instrs);
+                let rhs = value.to_ir(instrs, symbols);
 
                 instrs.push(Instr::Copy { src: rhs, dst: Place(dst.clone()) });
 
@@ -359,8 +371,8 @@ impl ToIr for ast::Expr {
                 let ast::Expr::Var(ref dst) = lhs.expr else {
                     unreachable!("place expression should be resolved earlier.")
                 };
-                let ret =
-                    Self::Binary { op: *op, lhs: lhs.clone(), rhs: rhs.clone() }.to_ir(instrs);
+                let ret = Self::Binary { op: *op, lhs: lhs.clone(), rhs: rhs.clone() }
+                    .to_ir(instrs, symbols, expr_type);
 
                 instrs.push(Instr::Copy { src: ret, dst: Place(dst.clone()) });
 
@@ -374,17 +386,17 @@ impl ToIr for ast::Expr {
                 let e2_label = eco_format!("e2.{}", counter);
                 let result = Place(eco_format!("ter{}", counter));
 
-                let cond = cond.to_ir(instrs);
+                let cond = cond.to_ir(instrs, symbols);
                 instrs.push(Instr::JumpIfZero { cond, target: e2_label.clone() });
 
-                let v1 = then.to_ir(instrs);
+                let v1 = then.to_ir(instrs, symbols);
                 instrs.extend([
                     Instr::Copy { src: v1, dst: result.clone() },
                     Instr::Jump { target: end_label.clone() },
                     Instr::Label(e2_label),
                 ]);
 
-                let v2 = else_.to_ir(instrs);
+                let v2 = else_.to_ir(instrs, symbols);
                 instrs.extend([
                     Instr::Copy { src: v2, dst: result.clone() },
                     Instr::Label(end_label),
@@ -394,23 +406,43 @@ impl ToIr for ast::Expr {
             }
 
             Self::FuncCall { name, args } => {
-                let dst = eco_format!("call.{}", GEN.fetch_add(1, Relaxed));
-                let dst = Place(dst);
+                let dst = make_ir_variable("cll", expr_type.clone(), symbols);
 
-                let vals = args.iter().map(|arg| arg.to_ir(instrs)).collect();
+                let vals = args.iter().map(|arg| arg.to_ir(instrs, symbols)).collect();
 
                 instrs.push(Instr::FuncCall { name: name.clone(), args: vals, dst: dst.clone() });
 
                 Value::Var(dst)
             }
 
-            Self::Cast { .. } => todo!(),
+            Self::Cast { target, inner } => {
+                let src = inner.to_ir(instrs, symbols);
+                if Some(target) == inner.ret.as_ref() {
+                    return src;
+                }
+
+                let dst = make_ir_variable("cst", expr_type.clone(), symbols);
+
+                match target {
+                    Type::Int => instrs.push(Instr::Truncate { src, dst: dst.clone() }),
+                    Type::Long => instrs.push(Instr::SignExtend { src, dst: dst.clone() }),
+                    Type::Func { .. } => unreachable!(),
+                }
+
+                Value::Var(dst)
+            }
         }
     }
 }
 
-fn postfix_prefix_instrs(instrs: &mut Vec<Instr>, op: ast::UnaryOp, expr: &ast::Expr) -> Value {
-    let ast::Expr::Var(ref dst) = *expr else {
+fn postfix_prefix_instrs(
+    instrs: &mut Vec<Instr>,
+    symbols: &mut Namespace<TypeCtx>,
+    op: ast::UnaryOp,
+    expr: &ast::TypedExpr,
+    expr_type: &Type,
+) -> Value {
+    let ast::Expr::Var(ref dst) = expr.expr else {
         unreachable!("place expression should be resolved earlier.")
     };
 
@@ -423,8 +455,7 @@ fn postfix_prefix_instrs(instrs: &mut Vec<Instr>, op: ast::UnaryOp, expr: &ast::
         _ => unreachable!(),
     };
 
-    let tmp = eco_format!("fix.{}", GEN.fetch_add(1, Relaxed));
-    let tmp = Place(tmp);
+    let tmp = make_ir_variable("fix", expr_type.clone(), symbols);
 
     let var = Place(dst.clone());
 
@@ -432,12 +463,17 @@ fn postfix_prefix_instrs(instrs: &mut Vec<Instr>, op: ast::UnaryOp, expr: &ast::
         instrs.push(Instr::Copy { src: Value::Var(var.clone()), dst: tmp.clone() });
     }
 
-    let op = op.to_ir(instrs);
+    let op = op.to_ir();
+    let one = match expr.ret.as_ref().expect("operand type info must be known") {
+        Type::Int => Const::Int(1),
+        Type::Long => Const::Long(1),
+        Type::Func { .. } => unreachable!(),
+    };
 
     instrs.push(Instr::Binary {
         op,
         lhs: Value::Var(var.clone()),
-        rhs: Value::Const(1),
+        rhs: Value::Const(one),
         dst: var.clone(),
     });
 
@@ -446,9 +482,11 @@ fn postfix_prefix_instrs(instrs: &mut Vec<Instr>, op: ast::UnaryOp, expr: &ast::
 
 fn logical_ops_instrs(
     instrs: &mut Vec<Instr>,
+    symbols: &mut Namespace<TypeCtx>,
     op: ast::BinaryOp,
-    lhs: &ast::Expr,
-    rhs: &ast::Expr,
+    lhs: &ast::TypedExpr,
+    rhs: &ast::TypedExpr,
+    expr_type: &Type,
 ) -> Value {
     let counter = GEN.fetch_add(1, Relaxed);
 
@@ -457,36 +495,34 @@ fn logical_ops_instrs(
     let cond_jump = eco_format!("jmp.{}", counter);
     let end = eco_format!("end.{}", counter);
 
-    let dst_name = eco_format!("lgc.{}", counter);
-    let dst = Place(dst_name);
+    let dst = make_ir_variable("lgc", expr_type.clone(), symbols);
 
-    let v1 = lhs.to_ir(instrs);
+    let v1 = lhs.to_ir(instrs, symbols);
     instrs.push(if or {
         Instr::JumpIfNotZero { cond: v1, target: cond_jump.clone() }
     } else {
         Instr::JumpIfZero { cond: v1, target: cond_jump.clone() }
     });
 
-    let v2 = rhs.to_ir(instrs);
+    let v2 = rhs.to_ir(instrs, symbols);
     instrs.extend([
         if or {
             Instr::JumpIfNotZero { cond: v2, target: cond_jump.clone() }
         } else {
             Instr::JumpIfZero { cond: v2, target: cond_jump.clone() }
         },
-        Instr::Copy { src: Value::Const(i32::from(!or)), dst: dst.clone() },
+        Instr::Copy { src: Value::Const(Const::Int(i32::from(!or))), dst: dst.clone() },
         Instr::Jump { target: end.clone() },
         Instr::Label(cond_jump),
-        Instr::Copy { src: Value::Const(i32::from(or)), dst: dst.clone() },
+        Instr::Copy { src: Value::Const(Const::Int(i32::from(or))), dst: dst.clone() },
         Instr::Label(end),
     ]);
 
     Value::Var(dst)
 }
 
-impl ToIr for ast::UnaryOp {
-    type Output = UnOp;
-    fn to_ir(&self, _: &mut Vec<Instr>) -> Self::Output {
+impl ast::UnaryOp {
+    fn to_ir(self) -> UnOp {
         match self {
             Self::Complement => UnOp::Complement,
             Self::Negate => UnOp::Negate,
@@ -498,9 +534,8 @@ impl ToIr for ast::UnaryOp {
         }
     }
 }
-impl ToIr for ast::BinaryOp {
-    type Output = BinOp;
-    fn to_ir(&self, _: &mut Vec<Instr>) -> Self::Output {
+impl ast::BinaryOp {
+    fn to_ir(self) -> BinOp {
         match self {
             Self::Add => BinOp::Add,
             Self::Subtract => BinOp::Subtract,
@@ -526,48 +561,40 @@ impl ToIr for ast::BinaryOp {
         }
     }
 }
-impl ToIr for ast::Block {
-    type Output = ();
-
-    fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
+impl ast::Block {
+    fn to_ir(&self, instrs: &mut Vec<Instr>, symbols: &mut Namespace<TypeCtx>) {
         for bi in &self.0 {
-            bi.to_ir(instrs);
+            bi.to_ir(instrs, symbols);
         }
     }
 }
-impl ToIr for ast::BlockItem {
-    type Output = ();
-
-    fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
+impl ast::BlockItem {
+    fn to_ir(&self, instrs: &mut Vec<Instr>, symbols: &mut Namespace<TypeCtx>) {
         match self {
             ast::BlockItem::S(stmt) => {
-                stmt.to_ir(instrs);
+                stmt.to_ir(instrs, symbols);
             }
             ast::BlockItem::D(decl) => {
-                decl.to_ir(instrs);
+                decl.to_ir(instrs, symbols);
             }
         }
     }
 }
-impl ToIr for ast::Decl {
-    type Output = ();
-
-    fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
+impl ast::Decl {
+    fn to_ir(&self, instrs: &mut Vec<Instr>, symbols: &mut Namespace<TypeCtx>) {
         match self {
             Self::Func(func @ ast::FuncDecl { body: Some(_), .. }) => {
-                func.to_ir(instrs);
+                func.to_ir(instrs, symbols);
             }
             Self::Func(_) => {}
-            Self::Var(var) => var.to_ir(instrs),
+            Self::Var(var) => var.to_ir(instrs, symbols),
         };
     }
 }
-impl ToIr for ast::VarDecl {
-    type Output = ();
-
-    fn to_ir(&self, instrs: &mut Vec<Instr>) -> Self::Output {
+impl ast::VarDecl {
+    fn to_ir(&self, instrs: &mut Vec<Instr>, symbols: &mut Namespace<TypeCtx>) {
         if let Some(e) = &self.init {
-            let v = e.to_ir(instrs);
+            let v = e.to_ir(instrs, symbols);
             instrs.push(Instr::Copy { src: v, dst: Place(self.name.clone()) });
         }
     }

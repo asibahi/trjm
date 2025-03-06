@@ -478,8 +478,8 @@ impl ToAsm for ir::TopLevel {
 
                 TopLevel::Function { name: name.clone(), instrs, stack_size: 0, global: *global }
             }
-            ir::TopLevel::StaticVar { name, global, init } => {
-                TopLevel::StaticVariable { name: name.clone(), global: *global, init: *init }
+            ir::TopLevel::StaticVar { name, global, .. } => {
+                TopLevel::StaticVariable { name: name.clone(), global: *global, init: todo!() }
             }
         }
     }
@@ -493,6 +493,10 @@ impl ToAsm for ir::Instr {
             Self::Return(value) => {
                 vec![Instr::Mov(value.to_asm(), Operand::Reg(Register::AX, 4)), Instr::Ret]
             }
+
+            Self::SignExtend { .. } => todo!(),
+            Self::Truncate { .. } => todo!(),
+
             Self::Unary { op: ir::UnOp::Not, src, dst } => {
                 let dst = dst.to_asm();
                 vec![
@@ -589,7 +593,7 @@ impl ToAsm for ir::Value {
     type Output = Operand;
     fn to_asm(&self) -> Self::Output {
         match self {
-            Self::Const(i) => Operand::Imm(*i),
+            Self::Const(_) => Operand::Imm(todo!()),
             Self::Var(place) => place.to_asm(),
         }
     }

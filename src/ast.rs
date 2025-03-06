@@ -1,4 +1,4 @@
-use crate::ir::{self, GEN, ToIr};
+use crate::ir::{self, GEN,};
 use ecow::{EcoString as Ecow, eco_format};
 use either::Either::{self, Left, Right};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -37,10 +37,7 @@ impl Program {
     pub fn new(decls: Vec<Decl>) -> Self {
         Self { decls, symbols: Namespace::default() }
     }
-    pub fn compile(&self) -> ir::Program {
-        let mut buf = vec![];
-        self.to_ir(&mut buf)
-    }
+
     pub fn semantic_analysis(mut self) -> anyhow::Result<Self> {
         // semantic analysis
 
@@ -58,6 +55,13 @@ impl Program {
 
         Ok(Self { decls: self.decls, symbols: self.symbols })
     }
+
+    pub fn compile(mut self) -> ir::Program {
+        let mut buf = vec![];
+        let mut symbols = std::mem::take(&mut self.symbols);
+
+        self.to_ir(&mut buf, &mut symbols)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +76,13 @@ impl Type {
         // if either of these is a function shouldn't we panic ?
         // why is function in the same type anyway ?
         if self == other { self } else { Type::Long }
+    }
+    pub fn zeroed_static(&self) -> StaticInit {
+        match self {
+            Type::Int => StaticInit::Int(0),
+            Type::Long => StaticInit::Long(0),
+            Type::Func { .. } => unreachable!("function static value not a thing"),
+        }
     }
 }
 

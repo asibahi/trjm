@@ -101,13 +101,12 @@ impl ToIr for ast::Program {
         // traverse symbol table
         top_level.extend(self.symbols.iter().filter_map(|(name, type_ctx)| match type_ctx.attr {
             ast::Attributes::Static { init, global } => match init {
-                ast::InitValue::Tentative => {
-                    Some(TopLevel::StaticVar { name: name.clone(), global, init: 0 })
-                }
-                ast::InitValue::Initial(i) => {
+                ast::Tentative => Some(TopLevel::StaticVar { name: name.clone(), global, init: 0 }),
+                ast::Initial(ast::StaticInit::Int(i)) => {
                     Some(TopLevel::StaticVar { name: name.clone(), global, init: i })
                 }
-                ast::InitValue::None => None,
+                ast::Initial(ast::StaticInit::Long(_)) => todo!(),
+                ast::NoInit => None,
             },
             _ => None,
         }));

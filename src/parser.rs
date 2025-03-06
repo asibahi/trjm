@@ -376,7 +376,7 @@ fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, TypedExpr, ParseError<'_>> {
             use Operation::*;
             Ok(match op {
                 Prefix(Left(op), exp) | Postfix(exp, op) => Expr::Unary(op, Box::new(exp)),
-                Prefix(Right(ty), exp) => Expr::Cast { to: ty, from: Box::new(exp) },
+                Prefix(Right(ty), exp) => Expr::Cast { target: ty, inner: Box::new(exp) },
                 Binary(lhs, Typical(op), rhs) => {
                     Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }
                 }

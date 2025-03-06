@@ -4,6 +4,7 @@ use either::Either::{self, Left, Right};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::{
     collections::{HashSet, hash_map::Entry},
+    ops::Deref,
     sync::atomic::Ordering::Relaxed,
 };
 
@@ -64,7 +65,14 @@ pub enum Type {
     Int,
     Long,
     Func { params: Vec<Type>, ret: Box<Type> },
-    Unknown,
+}
+
+impl Type {
+    fn get_common_type(self, other: Self) -> Self {
+        // if either of these is a function shouldn't we panic ?
+        // why is function in the same type anyway ?
+        if self == other { self } else { Type::Long }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,8 +85,15 @@ pub enum Attributes {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitValue {
     Tentative,
-    Initial(i32),
-    None,
+    Initial(StaticInit),
+    NoInit,
+}
+pub use InitValue::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaticInit {
+    Int(i32),
+    Long(i64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,10 +183,12 @@ pub struct VarDecl {
 }
 impl VarDecl {
     fn type_check_file(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
-        let mut init = match self.init {
-            Some(TypedExpr { expr: Expr::Const(Const::Int(i)), .. }) => InitValue::Initial(i),
-            None if self.sc == StorageClass::Extern => InitValue::None,
-            None => InitValue::Tentative,
+        let mut init = match self.init.clone() {
+            Some(TypedExpr { expr: Expr::Const(cnst), .. }) => {
+                Initial(cnst.into_static_init(self.var_type.clone()))
+            }
+            None if self.sc == StorageClass::Extern => NoInit,
+            None => Tentative,
             _ => anyhow::bail!("non-constant initializer"),
         };
 
@@ -180,8 +197,12 @@ impl VarDecl {
         match symbols.get(&self.name) {
             None => {}
             Some(TypeCtx { type_: Type::Func { .. }, .. }) => {
-                // not an int
+                // not a constant
                 anyhow::bail!("function redclared as variable");
+            }
+            Some(TypeCtx { type_, .. }) if *type_ != self.var_type => {
+                // not a constant
+                anyhow::bail!("conflicting type declarations");
             }
             Some(TypeCtx { attr: Attributes::Local | Attributes::Fun { .. }, .. }) => {
                 unreachable!()
@@ -189,31 +210,23 @@ impl VarDecl {
             Some(TypeCtx { attr: Attributes::Static { init: o_i, global: o_g }, .. }) => {
                 match self.sc {
                     StorageClass::Extern => global = *o_g,
-                    _ if *o_g != global => anyhow::bail!("Conflicting variable linkage"),
-
+                    _ if *o_g != global => anyhow::bail!("conflicting variable linkage"),
                     _ => {}
                 }
 
                 match (init, *o_i) {
-                    (InitValue::Initial(_), InitValue::Initial(_)) => {
-                        anyhow::bail!("Conflicting file scope definitions");
-                    }
-
-                    (InitValue::Initial(i), _) | (_, InitValue::Initial(i)) => {
-                        init = InitValue::Initial(i);
-                    }
-
-                    (InitValue::Tentative, _) | (_, InitValue::Tentative) => {
-                        init = InitValue::Tentative;
-                    }
-
-                    (InitValue::None, InitValue::None) => {}
+                    (Initial(_), Initial(_)) => anyhow::bail!("conflicting file scope definitions"),
+                    (Initial(i), _) | (_, Initial(i)) => init = Initial(i),
+                    (Tentative, _) | (_, Tentative) => init = Tentative,
+                    (NoInit, NoInit) => {}
                 };
             }
         }
 
-        let attrs = Attributes::Static { init, global };
-        symbols.insert(self.name.clone(), TypeCtx { type_: Type::Int, attr: attrs });
+        symbols.insert(
+            self.name.clone(),
+            TypeCtx { type_: self.var_type.clone(), attr: Attributes::Static { init, global } },
+        );
 
         Ok(self)
     }
@@ -223,32 +236,30 @@ impl VarDecl {
                 anyhow::bail!("init on local extern variable");
             }
             StorageClass::Extern => match symbols.entry(self.name.clone()) {
-                Entry::Occupied(occ) if occ.get().type_ != Type::Int => {
-                    anyhow::bail!("function redeclared as variable");
+                Entry::Occupied(occ) if occ.get().type_ != self.var_type.clone() => {
+                    anyhow::bail!("conflicting declaration of variable");
                 }
                 Entry::Vacant(vac) => {
                     vac.insert(TypeCtx {
-                        type_: Type::Int,
-                        attr: Attributes::Static { init: InitValue::None, global: true },
+                        type_: self.var_type.clone(),
+                        attr: Attributes::Static { init: NoInit, global: true },
                     });
                 }
                 Entry::Occupied(_) => {}
             },
             StorageClass::Static => {
                 let init_value = match self.init.take() {
-                    Some(TypedExpr { expr: Expr::Const(Const::Int(i)), .. }) => {
-                        InitValue::Initial(i)
+                    Some(TypedExpr { expr: Expr::Const(cnst), .. }) => {
+                        Initial(cnst.into_static_init(self.var_type.clone()))
                     }
-                    None => InitValue::Initial(0),
-                    _ => {
-                        anyhow::bail!("non-constant initializer on local static variable");
-                    }
+                    None => Initial(StaticInit::Int(0)),
+                    _ => anyhow::bail!("non-constant initializer on local static variable"),
                 };
 
                 symbols.insert(
                     self.name.clone(),
                     TypeCtx {
-                        type_: Type::Int,
+                        type_: self.var_type.clone(),
                         attr: Attributes::Static { init: init_value, global: false },
                     },
                 );
@@ -256,7 +267,7 @@ impl VarDecl {
             StorageClass::None => {
                 symbols.insert(
                     self.name.clone(),
-                    TypeCtx { type_: Type::Int, attr: Attributes::Local },
+                    TypeCtx { type_: self.var_type.clone(), attr: Attributes::Local },
                 );
 
                 self.init = match self.init {
@@ -315,6 +326,10 @@ impl FuncDecl {
         let mut already_defined = false;
         let mut global = self.sc != StorageClass::Static;
 
+        let Type::Func { ret: ret_type, params: arg_types } = self.fun_type.clone() else {
+            unreachable!()
+        };
+
         match symbols.get(&self.name) {
             None => {}
             Some(TypeCtx { type_: Type::Func { .. }, attr: Attributes::Fun { defined, .. } })
@@ -330,9 +345,9 @@ impl FuncDecl {
             }
 
             Some(TypeCtx {
-                type_: Type::Func { params, ret },
+                type_: type_ @ Type::Func { params, .. },
                 attr: Attributes::Fun { defined, global: old_global },
-            }) if params.len() == self.params.len() => {
+            }) if params.len() == self.params.len() && *type_ == self.fun_type => {
                 already_defined = *defined;
                 global = *old_global;
             }
@@ -342,17 +357,17 @@ impl FuncDecl {
         symbols.insert(
             self.name.clone(),
             TypeCtx {
-                type_: Type::Func { params: todo!(), ret: todo!() },
+                type_: self.fun_type.clone(),
                 attr: Attributes::Fun { defined: already_defined || has_body, global },
             },
         );
 
         let body = if let Some(body) = self.body {
-            for param in self.params.clone() {
-                symbols.insert(param, TypeCtx { type_: Type::Int, attr: Attributes::Local });
+            for (param, ty) in self.params.clone().iter().zip(arg_types) {
+                symbols.insert(param.clone(), TypeCtx { type_: ty, attr: Attributes::Local });
             }
 
-            Some(body.type_check(symbols)?)
+            Some(body.type_check(symbols, *ret_type)?)
         } else {
             None
         };
@@ -362,7 +377,7 @@ impl FuncDecl {
             params: self.params,
             body,
             sc: if global { StorageClass::Extern } else { StorageClass::Static },
-            fun_type: todo!(),
+            fun_type: self.fun_type,
         })
     }
 
@@ -492,9 +507,13 @@ impl BlockItem {
         })
     }
 
-    fn type_check(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
+    fn type_check(
+        self,
+        symbols: &mut Namespace<TypeCtx>,
+        enclosing_func_ret: Type,
+    ) -> anyhow::Result<Self> {
         Ok(match self {
-            Self::S(stmt) => Self::S(stmt.type_check(symbols)?),
+            Self::S(stmt) => Self::S(stmt.type_check(symbols, enclosing_func_ret)?),
             Self::D(decl) => Self::D(decl.type_check(Scope::Block, symbols)?),
         })
     }
@@ -559,11 +578,15 @@ impl Block {
         Ok(Self(acc))
     }
 
-    fn type_check(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
+    fn type_check(
+        self,
+        symbols: &mut Namespace<TypeCtx>,
+        enclosing_func_ret: Type,
+    ) -> anyhow::Result<Self> {
         let mut acc = Vec::with_capacity(self.0.len());
 
         for bi in self.0 {
-            let bi = bi.type_check(symbols)?;
+            let bi = bi.type_check(symbols, enclosing_func_ret.clone())?;
             acc.push(bi);
         }
 
@@ -988,26 +1011,34 @@ impl Stmt {
         })
     }
 
-    fn type_check(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
+    fn type_check(
+        self,
+        symbols: &mut Namespace<TypeCtx>,
+        enclosing_func_ret: Type,
+    ) -> anyhow::Result<Self> {
         Ok(match self {
-            Self::Return(expr) => Self::Return(expr.type_check(symbols)?),
+            Self::Return(expr) => {
+                let expr = expr.type_check(symbols)?.cast_to_type(enclosing_func_ret);
+
+                Self::Return(expr)
+            }
             Self::Expression(expr) => Self::Expression(expr.type_check(symbols)?),
             Self::If { cond, then, else_ } => Self::If {
                 cond: cond.type_check(symbols)?,
-                then: Box::new(then.type_check(symbols)?),
+                then: Box::new(then.type_check(symbols, enclosing_func_ret.clone())?),
                 else_: match else_ {
-                    Some(s) => Some(Box::new(s.type_check(symbols)?)),
+                    Some(s) => Some(Box::new(s.type_check(symbols, enclosing_func_ret)?)),
                     None => None,
                 },
             },
-            Self::Compound(block) => Self::Compound(block.type_check(symbols)?),
+            Self::Compound(block) => Self::Compound(block.type_check(symbols, enclosing_func_ret)?),
             Self::While { cond, body, label } => Self::While {
                 cond: cond.type_check(symbols)?,
-                body: Box::new(body.type_check(symbols)?),
+                body: Box::new(body.type_check(symbols, enclosing_func_ret)?),
                 label,
             },
             Self::DoWhile { body, cond, label } => Self::DoWhile {
-                body: Box::new(body.type_check(symbols)?),
+                body: Box::new(body.type_check(symbols, enclosing_func_ret)?),
                 cond: cond.type_check(symbols)?,
                 label,
             },
@@ -1028,24 +1059,27 @@ impl Stmt {
                     Some(e) => Some(e.type_check(symbols)?),
                     None => None,
                 },
-                body: Box::new(body.type_check(symbols)?),
+                body: Box::new(body.type_check(symbols, enclosing_func_ret)?),
                 label,
             },
-            Self::Label(label, stmt) => Self::Label(label, Box::new(stmt.type_check(symbols)?)),
+            Self::Label(label, stmt) => {
+                Self::Label(label, Box::new(stmt.type_check(symbols, enclosing_func_ret)?))
+            }
             Self::Switch { ctrl, body, label, cases } => Self::Switch {
                 ctrl: ctrl.type_check(symbols)?,
-                body: Box::new(body.type_check(symbols)?),
+                body: Box::new(body.type_check(symbols, enclosing_func_ret)?),
                 label,
                 cases,
             },
             Self::Case { cnst, body, label } => Self::Case {
                 cnst: cnst.type_check(symbols)?,
-                body: Box::new(body.type_check(symbols)?),
+                body: Box::new(body.type_check(symbols, enclosing_func_ret)?),
                 label,
             },
-            Self::Default { body, label } => {
-                Self::Default { body: Box::new(body.type_check(symbols)?), label }
-            }
+            Self::Default { body, label } => Self::Default {
+                body: Box::new(body.type_check(symbols, enclosing_func_ret)?),
+                label,
+            },
             Self::GoTo(_) | Self::Break(_) | Self::Continue(_) | Self::Null => self,
         })
     }
@@ -1054,15 +1088,22 @@ impl Stmt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedExpr {
     pub expr: Expr,
-    pub ret: Type,
+    pub ret: Option<Type>,
 }
 impl TypedExpr {
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {
         Ok(Self { expr: self.expr.resolve_identifiers(map)?, ret: self.ret })
     }
 
-    fn type_check(self, _symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
-        todo!()
+    fn type_check(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
+        self.expr.type_check(symbols)
+    }
+
+    fn cast_to_type(self, target: Type) -> Self {
+        if self.ret == Some(target.clone()) {
+            return self;
+        }
+        Expr::Cast { target: target.clone(), inner: Box::new(self) }.typed(target)
     }
 }
 
@@ -1070,7 +1111,7 @@ impl TypedExpr {
 pub enum Expr {
     Const(Const),
     Var(Ecow),
-    Cast { to: Type, from: Box<TypedExpr> },
+    Cast { target: Type, inner: Box<TypedExpr> },
     Unary(UnaryOp, Box<TypedExpr>),
     Binary { op: BinaryOp, lhs: Box<TypedExpr>, rhs: Box<TypedExpr> },
     CompoundAssignment { op: BinaryOp, lhs: Box<TypedExpr>, rhs: Box<TypedExpr> },
@@ -1080,10 +1121,10 @@ pub enum Expr {
 }
 impl Expr {
     pub fn dummy_typed(self) -> TypedExpr {
-        TypedExpr { expr: self, ret: Type::Unknown }
+        TypedExpr { expr: self, ret: None }
     }
     pub fn typed(self, ty: Type) -> TypedExpr {
-        TypedExpr { expr: self, ret: ty }
+        TypedExpr { expr: self, ret: Some(ty) }
     }
 
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {
@@ -1137,71 +1178,170 @@ impl Expr {
 
                 Ok(Self::FuncCall { name, args: resolved_args })
             }
-            Self::Cast { to, from } => {
+            Self::Cast { target: to, inner: from } => {
                 let from = Box::new(from.resolve_identifiers(map)?);
-                Ok(Self::Cast { to, from })
+                Ok(Self::Cast { target: to, inner: from })
             }
         }
     }
 
-    fn type_check(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
+    #[allow(clippy::too_many_lines)]
+    fn type_check(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<TypedExpr> {
         match self {
             Self::FuncCall { name, args } => {
-                match &symbols
-                    .get(name.as_str())
+                let (types, ret) = match &symbols
+                    .get(&name)
                     .ok_or(anyhow::anyhow!("function does not exist in symbol map"))?
                     .type_
                 {
                     Type::Func { params, .. } if params.len() != args.len() => {
                         anyhow::bail!("function called with wrong number of arguments");
                     }
-                    Type::Func { .. } => {}
-                    _ => {
-                        anyhow::bail!("Variable used as function name");
-                    }
+                    Type::Func { params, ret } => (params.clone(), ret.deref().clone()),
+
+                    _ => anyhow::bail!("Variable used as function name"),
+                };
+
+                let mut acc = Vec::with_capacity(types.len());
+                for (arg, ty) in args.iter().cloned().zip(types) {
+                    let arg = arg.type_check(symbols)?;
+                    acc.push(arg.cast_to_type(ty));
                 }
 
-                for arg in args.clone() {
-                    arg.type_check(symbols)?;
-                }
-
-                Ok(Self::FuncCall { name, args })
+                Ok(Self::FuncCall { name, args: acc }.typed(ret))
             }
-            Self::Var(name) => {
-                if let Some(Type::Int) = symbols.get(name.as_str()).map(|c| c.type_.clone()) {
-                    Ok(Self::Var(name))
-                } else {
+            Self::Var(name) => match symbols.get(&name).map(|c| c.type_.clone()) {
+                Some(Type::Func { .. }) => {
                     anyhow::bail!("function used as variable");
                 }
-            }
+                None => {
+                    anyhow::bail!("variable name is not declared");
+                }
+                Some(ty) => Ok(Self::Var(name).typed(ty)),
+            },
 
             // --
-            Self::Unary(op, expr) => Ok(Self::Unary(op, Box::new(expr.type_check(symbols)?))),
+            Self::Unary(op, expr) => {
+                let expr = Box::new(expr.type_check(symbols)?);
 
-            Self::Binary { op, lhs, rhs } => Ok(Self::Binary {
-                op,
-                lhs: Box::new(lhs.type_check(symbols)?),
-                rhs: Box::new(rhs.type_check(symbols)?),
-            }),
+                let ty = match op {
+                    UnaryOp::Not => Type::Int,
+                    _ => expr.clone().ret.expect("unary type should be known"),
+                };
 
-            Self::Assignemnt(lhs, rhs) => Ok(Self::Assignemnt(
-                Box::new(lhs.type_check(symbols)?),
-                Box::new(rhs.type_check(symbols)?),
-            )),
+                Ok(Self::Unary(op, expr).typed(ty))
+            }
 
-            Self::CompoundAssignment { op, lhs, rhs } => Ok(Self::CompoundAssignment {
-                op,
-                lhs: Box::new(lhs.type_check(symbols)?),
-                rhs: Box::new(rhs.type_check(symbols)?),
-            }),
-            Self::Const(_) => Ok(self),
-            Self::Conditional { cond, then, else_ } => Ok(Self::Conditional {
-                cond: Box::new(cond.type_check(symbols)?),
-                then: Box::new(then.type_check(symbols)?),
-                else_: Box::new(else_.type_check(symbols)?),
-            }),
+            Self::Binary { op, lhs, rhs } => {
+                let lhs = Box::new(lhs.type_check(symbols)?);
+                let rhs = Box::new(rhs.type_check(symbols)?);
 
-            Self::Cast { .. } => todo!(),
+                match op {
+                    BinaryOp::And | BinaryOp::Or => {
+                        return Ok(Self::Binary { op, lhs, rhs }.typed(Type::Int));
+                    }
+                    _ => {}
+                }
+
+                let common = lhs
+                    .clone()
+                    .ret
+                    .and_then(|lht| rhs.clone().ret.map(|rht| lht.get_common_type(rht)))
+                    .expect("binary operand type should be known at this point");
+
+                let lhs = Box::new(lhs.cast_to_type(common.clone()));
+                let rhs = Box::new(rhs.cast_to_type(common.clone()));
+
+                let ret = Self::Binary { op, lhs, rhs };
+
+                Ok(match op {
+                    BinaryOp::Add
+                    | BinaryOp::Subtract
+                    | BinaryOp::Multiply
+                    | BinaryOp::Divide
+                    | BinaryOp::Reminder => ret.typed(common),
+
+                    _ => ret.typed(Type::Int),
+                })
+            }
+
+            Self::Assignemnt(lhs, rhs) => {
+                let lhs = Box::new(lhs.type_check(symbols)?);
+                let rhs = rhs.type_check(symbols)?;
+
+                let left_type =
+                    lhs.clone().ret.expect("assignee type should be known at this point");
+                let rhs = Box::new(rhs.cast_to_type(left_type.clone()));
+
+                Ok(Self::Assignemnt(lhs, rhs).typed(left_type))
+            }
+
+            Self::CompoundAssignment { op, lhs, rhs } => {
+                let lhs = Box::new(lhs.type_check(symbols)?);
+                let rhs = Box::new(rhs.type_check(symbols)?);
+
+                // same logic as binary currently with slight changes
+                // most likely wrong . todo
+                // shut up rustc for now
+                // according to Claude, the caluclation is done with `long`
+                // but type of lhs does not change so it is caast back to int.
+
+                match op {
+                    BinaryOp::And | BinaryOp::Or => {
+                        return Ok(Self::CompoundAssignment { op, lhs, rhs }.typed(Type::Int));
+                    }
+                    _ => {}
+                }
+
+                let left_type =
+                    lhs.clone().ret.expect("assignee type should be known at this point");
+
+                let common = lhs
+                    .clone()
+                    .ret
+                    .and_then(|lht| rhs.clone().ret.map(|rht| lht.get_common_type(rht)))
+                    .expect("compound assignment operand type should be known at this point");
+
+                let lhs = Box::new(lhs.cast_to_type(common.clone()));
+                let rhs = Box::new(rhs.cast_to_type(common.clone()));
+
+                let ret = Self::CompoundAssignment { op, lhs, rhs };
+
+                Ok(match op {
+                    BinaryOp::Add
+                    | BinaryOp::Subtract
+                    | BinaryOp::Multiply
+                    | BinaryOp::Divide
+                    | BinaryOp::Reminder => ret.typed(left_type),
+
+                    _ => ret.typed(Type::Int),
+                })
+            }
+            Self::Const(c) => match c {
+                Const::Int(_) => Ok(self.typed(Type::Int)),
+                Const::Long(_) => Ok(self.typed(Type::Long)),
+            },
+            Self::Conditional { cond, then, else_ } => {
+                let cond = Box::new(cond.type_check(symbols)?);
+                let then = then.type_check(symbols)?;
+                let else_ = else_.type_check(symbols)?;
+
+                let common = then
+                    .clone()
+                    .ret
+                    .and_then(|lht| else_.clone().ret.map(|rht| lht.get_common_type(rht)))
+                    .expect("ternary operand type should be known at this point");
+
+                let then = Box::new(then.cast_to_type(common.clone()));
+                let else_ = Box::new(else_.cast_to_type(common.clone()));
+
+                Ok(Self::Conditional { cond, then, else_ }.typed(common))
+            }
+
+            Self::Cast { target, inner } => {
+                let inner = Box::new(inner.type_check(symbols)?);
+                Ok(Self::Cast { target: target.clone(), inner }.typed(target))
+            }
         }
     }
 }
@@ -1210,6 +1350,19 @@ impl Expr {
 pub enum Const {
     Int(i32),
     Long(i64),
+}
+
+impl Const {
+    fn into_static_init(self, target_type: Type) -> StaticInit {
+        match (self, target_type) {
+            (_, Type::Func { .. }) => unreachable!(),
+
+            (Const::Int(i), Type::Int) => StaticInit::Int(i),
+            (Const::Int(i), Type::Long) => StaticInit::Long(i as i64),
+            (Const::Long(i), Type::Int) => StaticInit::Int(i as i32),
+            (Const::Long(i), Type::Long) => StaticInit::Long(i),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

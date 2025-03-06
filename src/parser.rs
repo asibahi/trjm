@@ -3,16 +3,17 @@ use crate::{
     lexer::{Token, Tokens},
 };
 use ecow::EcoString as Ecow;
-use either::Either::{Left, Right};
+use either::Either::{self, Left, Right};
 use nom::{
     Finish, IResult, Parser,
-    branch::{alt, permutation},
+    branch::alt,
     bytes::take,
-    combinator::{all_consuming, opt, success, verify},
+    combinator::{all_consuming, complete, iterator, not, opt, verify},
+    error,
     multi::{many, separated_list0, separated_list1},
     sequence::{delimited, preceded, separated_pair, terminated},
 };
-use nom_language::precedence::{Assoc, Operation, binary_op, precedence, unary_op};
+use nom_language::precedence::{Assoc, Binary, Operation, Unary, binary_op, precedence, unary_op};
 
 type ParseError<'s> = ();
 // type ParseError<'s> = (Tokens<'s>, nom::error::ErrorKind);
@@ -45,33 +46,62 @@ macro_rules! tag_token {
     };
 }
 
-fn parse_specifiers(i: Tokens<'_>) -> IResult<Tokens<'_>, (Type, StorageClass), ParseError<'_>> {
-    permutation::<Tokens<'_>, _, _>((
-        // type
-        tag_token!(Token::Int => Type::Int),
-        // storage class
+fn parse_type(i: Tokens<'_>) -> IResult<Tokens<'_>, Type, ParseError<'_>> {
+    // this is clearly wrong for more types.
+    terminated(
         alt((
-            tag_token!(Token::Static => StorageClass::Static),
-            tag_token!(Token::Extern => StorageClass::Extern),
-            success(StorageClass::None),
+            tag_token!(Token::Int, Token::Long => Type::Long),
+            tag_token!(Token::Long, Token::Int => Type::Long),
+            tag_token!(Token::Long => Type::Long),
+            tag_token!(Token::Int => Type::Int),
         )),
-    ))
+        not(tag_token!(Token::Int)),
+    )
     .parse_complete(i)
 }
 
+fn parse_specifiers(i: Tokens<'_>) -> IResult<Tokens<'_>, (Type, StorageClass), ParseError<'_>> {
+    let mut iter = iterator(
+        i,
+        // nom issue #1835
+        complete(alt((
+            tag_token!(Token::Static => StorageClass::Static).map(Left),
+            tag_token!(Token::Extern => StorageClass::Extern).map(Left),
+            tag_token!(Token::Long => Token::Long).map(Right),
+            tag_token!(Token::Int => Token::Int).map(Right),
+        ))),
+    );
+
+    let (sc, ty) = iter.by_ref().partition::<Vec<_>, _>(Either::is_left);
+
+    let (i, ()) = iter.finish()?;
+
+    if sc.len() > 1 {
+        #[allow(clippy::unit_arg)]
+        return Err(nom::Err::Error(error::make_error(i, error::ErrorKind::TooLarge)));
+    }
+
+    let sc = sc.first().map_or(StorageClass::None, |e| e.clone().unwrap_left());
+
+    let ty = ty.iter().map(|e| e.clone().unwrap_right()).collect::<Vec<_>>();
+    let (_, ty) = parse_type(Tokens::from(&ty[..]))?;
+
+    Ok((i, (ty, sc)))
+}
+
 fn parse_var_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, VarDecl, ParseError<'_>> {
-    let (i, (_, sc)) = parse_specifiers.parse_complete(i)?;
+    let (i, (ty, sc)) = parse_specifiers.parse_complete(i)?;
 
     terminated(
         (parse_ident, opt(preceded(tag_token!(Token::Equal), parse_expr))),
         tag_token!(Token::Semicolon),
     )
-    .map(|(name, init)| VarDecl { name, init, sc, var_type: todo!() })
+    .map(|(name, init)| VarDecl { name, init, sc, var_type: ty.clone() })
     .parse_complete(i)
 }
 
 fn parse_func_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, FuncDecl, ParseError<'_>> {
-    let (i, (_, sc)) = parse_specifiers.parse_complete(i)?;
+    let (i, (ret, sc)) = parse_specifiers.parse_complete(i)?;
 
     let (i, name) = parse_ident.parse_complete(i)?;
 
@@ -79,19 +109,20 @@ fn parse_func_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, FuncDecl, ParseError<'_
         tag_token!(Token::ParenOpen),
         alt((
             tag_token!(Token::Void => Vec::new()),
-            separated_list1(
-                tag_token!(Token::Comma),
-                preceded(tag_token!(Token::Int), parse_ident),
-            ),
+            separated_list1(tag_token!(Token::Comma), parse_type.and(parse_ident)),
         )),
         tag_token!(Token::ParenClose),
     )
     .parse_complete(i)?;
 
+    let (tps, params) = params.into_iter().unzip();
+
+    let fun_type = Type::Func { params: tps, ret: Box::new(ret) };
+
     let (i, body) =
         parse_block.map(Some).or(tag_token!(Token::Semicolon => None)).parse_complete(i)?;
 
-    let func_def = FuncDecl { name, params, body, sc , fun_type: todo!()};
+    let func_def = FuncDecl { name, params, body, sc, fun_type };
 
     Ok((i, func_def))
 }
@@ -220,102 +251,133 @@ macro_rules! binop {
     };
 }
 
+fn parse_prefixes(
+    i: Tokens<'_>,
+) -> IResult<Tokens<'_>, Unary<Either<UnaryOp, Type>, i32>, ParseError<'_>> {
+    alt((
+        unary_op(2, tag_token!(Token::Hyphen => Left(UnaryOp::Negate))),
+        unary_op(2, tag_token!(Token::Tilde => Left(UnaryOp::Complement))),
+        unary_op(2, tag_token!(Token::Bang => Left(UnaryOp::Not))),
+        unary_op(2, tag_token!(Token::Plus => Left(UnaryOp::Plus))),
+        // chapter 5 extra credit
+        unary_op(2, tag_token!(Token::DblPlus => Left(UnaryOp::IncPre))),
+        unary_op(2, tag_token!(Token::DblHyphen => Left(UnaryOp::DecPre))),
+        // chapter 11 cast operation
+        unary_op(
+            2,
+            delimited(tag_token!(Token::ParenOpen), parse_type, tag_token!(Token::ParenClose))
+                .map(Right),
+        ),
+    ))
+    .parse_complete(i)
+}
+
+fn parse_postfixes(i: Tokens<'_>) -> IResult<Tokens<'_>, Unary<UnaryOp, i32>, ParseError<'_>> {
+    // chapter 5 extra credit
+
+    alt((
+        unary_op(1, tag_token!(Token::DblPlus => UnaryOp::IncPost)),
+        unary_op(1, tag_token!(Token::DblHyphen => UnaryOp::DecPost)),
+    ))
+    .parse_complete(i)
+}
+
+fn parse_infixes(i: Tokens<'_>) -> IResult<Tokens<'_>, Binary<BinKind, i32>, ParseError<'_>> {
+    alt((
+        alt((
+            binop!(4, Plus, Add),
+            binop!(4, Hyphen, Subtract),
+            binop!(3, Astrisk, Multiply),
+            binop!(3, ForeSlash, Divide),
+            binop!(3, Percent, Reminder),
+        )),
+        // chapter 3 extra credit
+        alt((
+            binop!(5, LeftShift, LeftShift),
+            binop!(5, RightShift, RightShift),
+            binop!(8, Ambersand, BitAnd),
+            binop!(9, Caret, BitXor),
+            binop!(10, Pipe, BitOr),
+            // chapter 6
+            binary_op(
+                13,
+                Assoc::Right,
+                delimited(tag_token!(Token::QMark), parse_expr, tag_token!(Token::Colon))
+                    .map(Ternary),
+            ),
+        )),
+        // chapter 4
+        alt((
+            binop!(7, DblEqual, Equal),
+            binop!(7, BangEqual, NotEqual),
+            binop!(11, DblAmbersand, And),
+            binop!(12, DblPipe, Or),
+            binop!(6, LessThan, LessThan),
+            binop!(6, LessEqual, LessOrEqual),
+            binop!(6, GreaterThan, GreaterThan),
+            binop!(6, GreaterEqual, GreaterOrEqual),
+        )),
+        // chapter 5
+        alt((
+            binary_op(14, Assoc::Right, tag_token!(Token::Equal => Assignment)),
+            // chapter 5 extra credit
+            binop!(= PlusEqual, Add),
+            binop!(= HyphenEqual, Subtract),
+            binop!(= AstriskEqual, Multiply),
+            binop!(= ForeSlashEqual, Divide),
+            binop!(= PercentEqual, Reminder),
+            binop!(= AmbersandEqual, BitAnd),
+            binop!(= PipeEqual, BitOr),
+            binop!(= CaretEqual, BitXor),
+            binop!(= LeftShiftEqual, LeftShift),
+            binop!(= RightShiftEqual, RightShift),
+        )),
+    ))
+    .parse_complete(i)
+}
+
+fn parse_operands(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
+    alt((
+        // function call
+        parse_ident
+            .and(delimited(
+                tag_token!(Token::ParenOpen),
+                separated_list0(tag_token!(Token::Comma), parse_expr),
+                tag_token!(Token::ParenClose),
+            ))
+            .map(|(name, args)| Expr::FuncCall { name, args }),
+        // const
+        tag_token!(Token::IntLiteral(_) | Token::LongLiteral(_)).map_opt(|t: Tokens<'_>| {
+            match t.0[0] {
+                Token::IntLiteral(i) => Some(Expr::Const(Const::Int(i))),
+                Token::LongLiteral(i) => Some(Expr::Const(Const::Long(i))),
+                _ => None,
+            }
+        }),
+        // group
+        delimited(tag_token!(Token::ParenOpen), parse_expr, tag_token!(Token::ParenClose)),
+        // variable
+        parse_ident.map(Expr::Var),
+    ))
+    .parse_complete(i)
+}
+
 fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, Expr, ParseError<'_>> {
     // precedence reference:
     // https://en.cppreference.com/w/c/language/operator_precedence
 
     precedence(
-        // prefix
-        alt((
-            unary_op(2, tag_token!(Token::Hyphen => UnaryOp::Negate)),
-            unary_op(2, tag_token!(Token::Tilde => UnaryOp::Complement)),
-            unary_op(2, tag_token!(Token::Bang => UnaryOp::Not)),
-            unary_op(2, tag_token!(Token::Plus => UnaryOp::Plus)),
-            // chapter 5 extra credit
-            unary_op(2, tag_token!(Token::DblPlus => UnaryOp::IncPre)),
-            unary_op(2, tag_token!(Token::DblHyphen => UnaryOp::DecPre)),
-        )),
-        // postfix // chapter 5 extra credit
-        alt((
-            unary_op(1, tag_token!(Token::DblPlus => UnaryOp::IncPost)),
-            unary_op(1, tag_token!(Token::DblHyphen => UnaryOp::DecPost)),
-        )),
-        // binary
-        alt((
-            alt((
-                binop!(4, Plus, Add),
-                binop!(4, Hyphen, Subtract),
-                binop!(3, Astrisk, Multiply),
-                binop!(3, ForeSlash, Divide),
-                binop!(3, Percent, Reminder),
-            )),
-            // chapter 3 extra credit
-            alt((
-                binop!(5, LeftShift, LeftShift),
-                binop!(5, RightShift, RightShift),
-                binop!(8, Ambersand, BitAnd),
-                binop!(9, Caret, BitXor),
-                binop!(10, Pipe, BitOr),
-                // chapter 6
-                binary_op(
-                    13,
-                    Assoc::Right,
-                    delimited(tag_token!(Token::QMark), parse_expr, tag_token!(Token::Colon))
-                        .map(Ternary),
-                ),
-            )),
-            // chapter 4
-            alt((
-                binop!(7, DblEqual, Equal),
-                binop!(7, BangEqual, NotEqual),
-                binop!(11, DblAmbersand, And),
-                binop!(12, DblPipe, Or),
-                binop!(6, LessThan, LessThan),
-                binop!(6, LessEqual, LessOrEqual),
-                binop!(6, GreaterThan, GreaterThan),
-                binop!(6, GreaterEqual, GreaterOrEqual),
-            )),
-            // chapter 5
-            alt((
-                binary_op(14, Assoc::Right, tag_token!(Token::Equal => Assignment)),
-                // chapter 5 extra credit
-                binop!(= PlusEqual, Add),
-                binop!(= HyphenEqual, Subtract),
-                binop!(= AstriskEqual, Multiply),
-                binop!(= ForeSlashEqual, Divide),
-                binop!(= PercentEqual, Reminder),
-                binop!(= AmbersandEqual, BitAnd),
-                binop!(= PipeEqual, BitOr),
-                binop!(= CaretEqual, BitXor),
-                binop!(= LeftShiftEqual, LeftShift),
-                binop!(= RightShiftEqual, RightShift),
-            )),
-        )),
-        // operands or factors
-        alt((
-            // function call
-            parse_ident
-                .and(delimited(
-                    tag_token!(Token::ParenOpen),
-                    separated_list0(tag_token!(Token::Comma), parse_expr),
-                    tag_token!(Token::ParenClose),
-                ))
-                .map(|(name, args)| Expr::FuncCall { name, args }),
-            // const
-            tag_token!(Token::IntLiteral(_)).map_opt(|t: Tokens<'_>| {
-                if let Token::IntLiteral(i) = t.0[0] { Some(Expr::Const(Const::Int(i))) } else { None }
-            }),
-            // group
-            delimited(tag_token!(Token::ParenOpen), parse_expr, tag_token!(Token::ParenClose)),
-            //variable
-            parse_ident.map(Expr::Var),
-        )),
+        parse_prefixes,
+        parse_postfixes,
+        parse_infixes,
+        parse_operands,
         // fold
         |op| -> Result<Expr, ()> {
             Ok(match op {
-                Operation::Prefix(op, exp) | Operation::Postfix(exp, op) => {
+                Operation::Prefix(Left(op), exp) | Operation::Postfix(exp, op) => {
                     Expr::Unary(op, Box::new(exp))
                 }
+                Operation::Prefix(Right(ty), exp) => Expr::Cast { to: ty, from: Box::new(exp) },
                 Operation::Binary(lhs, Typical(op), rhs) => {
                     Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }
                 }

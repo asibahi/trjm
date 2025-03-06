@@ -357,6 +357,12 @@ mod tests {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Tokens<'s>(pub &'s [Token]);
 
+impl<'s> From<&'s [Token]> for Tokens<'s> {
+    fn from(value: &'s [Token]) -> Self {
+        Tokens(value)
+    }
+}
+
 // stolen wholesale from nom's impl of &[u8]
 impl<'s> Input for Tokens<'s> {
     type Item = Token;

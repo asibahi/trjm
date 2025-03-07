@@ -12,14 +12,14 @@ use std::io::Write;
 #[derive(Debug, Clone, Copy)]
 enum BSymbol {
     Obj { type_: AsmType, is_static: bool },
-    Func { defined: bool },
+    Func { _defined: bool },
 }
 impl From<TypeCtx> for BSymbol {
     fn from(value: TypeCtx) -> Self {
         let TypeCtx { type_, attr } = value;
 
         match (type_, attr) {
-            (Type::Func { .. }, Func { defined, .. }) => BSymbol::Func { defined },
+            (Type::Func { .. }, Func { defined, .. }) => BSymbol::Func { _defined: defined },
             (_, Func { .. }) | (Type::Func { .. }, _) => unreachable!(),
 
             (Type::Int, Static { .. }) => BSymbol::Obj { type_: Longword, is_static: true },
@@ -69,6 +69,13 @@ impl AsmType {
             Quadword => 8,
         }
     }
+
+    fn emit_code(self) -> &'static str {
+        match self {
+            Longword => "l",
+            Quadword => "q",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -92,22 +99,23 @@ impl TopLevel {
 
                 instrs.iter().for_each(|i| i.emit_code(f));
             }
-            TopLevel::StaticVariable { name, global, init, .. } => {
+            TopLevel::StaticVariable { name, global, init, alignment } if init.is_zero() => {
                 if *global {
                     _ = writeln!(f, "\t.globl  _{name}");
                 }
-                if *init == StaticInit::Int(0) || *init == StaticInit::Long(0) {
-                    _ = writeln!(f, "\t.bss");
-                } else {
-                    _ = writeln!(f, "\t.data");
-                }
-                _ = writeln!(f, "\t.balign 4");
+                _ = writeln!(f, "\t.bss");
+                _ = writeln!(f, "\t.balign {alignment}");
                 _ = writeln!(f, "_{name}:");
-                if *init == StaticInit::Long(0) || *init == StaticInit::Int(0) {
-                    _ = writeln!(f, "\t.zero   4");
-                } else {
-                    _ = writeln!(f, "\t.long   {init}");
+                _ = writeln!(f, "\t.zero   {alignment}");
+            }
+            TopLevel::StaticVariable { name, global, init, alignment } => {
+                if *global {
+                    _ = writeln!(f, "\t.globl  _{name}");
                 }
+                _ = writeln!(f, "\t.data");
+                _ = writeln!(f, "\t.balign {alignment}");
+                _ = writeln!(f, "_{name}:");
+                _ = writeln!(f, "\t.{init}");
             }
         }
     }
@@ -170,7 +178,7 @@ impl TopLevel {
                     Instr::Mov(Longword, Imm(i), dst) if i32::try_from(i).is_err() => {
                         out.push(Instr::Mov(Longword, Imm(i64::from(i as i32)), dst));
                     }
-                    Instr::Cmp(ty, src @ Imm(i), dst @ (Stack(_) | Data(_)))
+                    Instr::Cmp(ty, src @ Imm(i), dst)
                         if i32::try_from(i).is_err() =>
                     {
                         out.extend([
@@ -205,15 +213,19 @@ impl TopLevel {
                     Instr::Binary(
                         opp @ (Operator::Add
                         | Operator::Sub
+                        | Operator::Mul
                         | Operator::And
                         | Operator::Or
-                        | Operator::Xor),
+                        | Operator::Xor
+                        // maybe ?
+                        | Operator::Shr
+                        | Operator::Shl),
                         ty,
                         src @ Imm(i),
                         dst,
                     ) if i32::try_from(i).is_err() => out.extend([
                         Instr::Mov(ty, src, Reg(R10, ty.width())),
-                        Instr::Binary(opp, ty, Reg(R10, 4).align_width(ty), dst),
+                        Instr::Binary(opp, ty, Reg(R10, ty.width()), dst),
                     ]),
                     Instr::Binary(
                         opp @ (Operator::Add
@@ -226,14 +238,16 @@ impl TopLevel {
                         dst @ (Stack(_) | Data(_)),
                     ) => out.extend([
                         Instr::Mov(ty, src, Reg(R10, ty.width())),
-                        Instr::Binary(opp, ty, Reg(R10, 4).align_width(ty), dst),
+                        Instr::Binary(opp, ty, Reg(R10, ty.width()), dst),
                     ]),
-                    Instr::Binary(Operator::Mul, ty, src, dst @ (Stack(_) | Data(_))) => out
-                        .extend([
+
+                    Instr::Binary(Operator::Mul, ty, src, dst @ (Stack(_) | Data(_))) => {
+                        out.extend([
                             Instr::Mov(ty, dst.clone(), Reg(R11, ty.width())),
                             Instr::Binary(Operator::Mul, ty, src, Reg(R11, ty.width())),
                             Instr::Mov(ty, Reg(R11, ty.width()), dst),
-                        ]),
+                        ]);
+                    }
                     Instr::Binary(
                         opp @ (Operator::Shl | Operator::Shr),
                         ty,
@@ -257,7 +271,6 @@ impl TopLevel {
                             Instr::Movsx(src, Reg(R11, 8)),
                             Instr::Mov(Quadword, Reg(R11, 8), dst),
                         ]);
-                        // todo
                     }
                     other => out.push(other),
                 }
@@ -288,28 +301,40 @@ pub enum Instr {
 impl Instr {
     fn emit_code(&self, f: &mut impl Write) {
         match self {
-            Self::Mov(_, src, dst) => {
+            Self::Mov(ty, src, dst) => {
+                let ty = ty.emit_code();
                 let src = src.emit_code() + ",";
                 let dst = dst.emit_code();
 
-                _ = writeln!(f, "\tmovl    {src:<7} {dst}");
+                _ = writeln!(f, "\tmov{ty}    {src:<7} {dst}");
             }
-            Self::Unary(un_op, _, operand) => {
+            Self::Unary(un_op, ty, operand) => {
+                let ty = ty.emit_code();
                 let uo = un_op.emit_code();
+                let uo = eco_format!("{uo}{ty}");
                 let op = operand.emit_code();
 
                 _ = writeln!(f, "\t{uo:<7} {op}");
             }
-            Self::Binary(bin_op, _, op1, op2) => {
+            Self::Binary(bin_op, ty, op1, op2) => {
+                let ty = ty.emit_code();
                 let bo = bin_op.emit_code();
+                let bo = eco_format!("{bo}{ty}");
+
                 let o1 = op1.emit_code() + ",";
                 let o2 = op2.emit_code();
 
                 _ = writeln!(f, "\t{bo:<7} {o1:<7} {o2}");
             }
-            Self::Idiv(_, op) => _ = writeln!(f, "\tidivl    {}", op.emit_code()),
+            Self::Idiv(ty, op) => {
+                let ty = ty.emit_code();
+                _ = writeln!(f, "\tidiv{ty}    {}", op.emit_code());
+            }
 
-            Self::Cdq(_) => _ = writeln!(f, "\tcdq"),
+            Self::Cdq(ty) => match ty {
+                Longword => _ = writeln!(f, "\tcdq"),
+                Quadword => _ = writeln!(f, "\tcqo"),
+            },
 
             Self::Push(op) => _ = writeln!(f, "\tpushq   {}", op.emit_code()),
             Self::Call(label) => _ = writeln!(f, "\tcall    _{label}"),
@@ -319,11 +344,12 @@ impl Instr {
                 _ = writeln!(f, "\tpopq    %rbp");
                 _ = writeln!(f, "\tret");
             }
-            Self::Cmp(_, op1, op2) => {
+            Self::Cmp(ty, op1, op2) => {
+                let ty = ty.emit_code();
                 let op1 = op1.emit_code() + ",";
                 let op2 = op2.emit_code();
 
-                _ = writeln!(f, "\tcmpl    {op1:<7} {op2}");
+                _ = writeln!(f, "\tcmp{ty}    {op1:<7} {op2}");
             }
             Self::SetCC(cond, op) => {
                 let cond = cond.emit_code();
@@ -337,7 +363,12 @@ impl Instr {
                 _ = writeln!(f, "\tj{cond:<6} .L{label}");
             }
             Self::Label(label) => _ = writeln!(f, ".L{label}:"),
-            Self::Movsx(..) => todo!(),
+            Self::Movsx(src, dst) => {
+                let src = src.emit_code() + ",";
+                let dst = dst.emit_code();
+
+                _ = writeln!(f, "\tmovslq  {src:<7} {dst}");
+            }
         }
     }
 
@@ -395,7 +426,7 @@ impl Operand {
     fn emit_code(&self) -> Ecow {
         match self {
             Imm(i) => eco_format!("${i}"),
-            Reg(r, s) => r.emit_code(*s),
+            Reg(r, s) => r.emit_code(*s).into(),
             Stack(i) => eco_format!("{i}(%rbp)"),
             Data(name) => eco_format!("_{name}(%rip)"),
 
@@ -459,18 +490,18 @@ pub enum Operator {
     Shl,
 }
 impl Operator {
-    fn emit_code(self) -> Ecow {
+    fn emit_code(self) -> &'static str {
         match self {
-            Self::Not => eco_format!("notl"),
-            Self::Neg => eco_format!("negl"),
-            Self::Add => eco_format!("addl"),
-            Self::Sub => eco_format!("subl"),
-            Self::Mul => eco_format!("imull"),
-            Self::And => eco_format!("andl"),
-            Self::Or => eco_format!("orl"),
-            Self::Xor => eco_format!("xorl"),
-            Self::Shr => eco_format!("sarl"),
-            Self::Shl => eco_format!("shll"),
+            Self::Not => "not",
+            Self::Neg => "neg",
+            Self::Add => "add",
+            Self::Sub => "sub",
+            Self::Mul => "imul",
+            Self::And => "and",
+            Self::Or => "or",
+            Self::Xor => "xor",
+            Self::Shr => "sar",
+            Self::Shl => "shl",
         }
     }
 }
@@ -491,57 +522,21 @@ pub enum Register {
 const ARG_REGISTERS: [Register; 6] = [DI, SI, DX, CX, R8, R9];
 use Register::*;
 impl Register {
-    fn emit_code(self, byte_size: u8) -> Ecow {
+    #[rustfmt::skip]
+    fn emit_code(self, byte_size: u8) -> &'static str {
         assert!(byte_size == 1 || byte_size == 2 || byte_size == 4 || byte_size == 8);
         match (self, byte_size) {
-            (AX, 1) => Ecow::from("%al"),
-            (AX, 2) => Ecow::from("%ax"),
-            (AX, 4) => Ecow::from("%eax"),
-            (AX, _) => Ecow::from("%rax"),
-
-            (DX, 1) => Ecow::from("%dl"),
-            (DX, 2) => Ecow::from("%dx"),
-            (DX, 4) => Ecow::from("%edx"),
-            (DX, _) => Ecow::from("%rdx"),
-
-            (DI, 1) => Ecow::from("%dil"),
-            (DI, 2) => Ecow::from("%di"),
-            (DI, 4) => Ecow::from("%edi"),
-            (DI, _) => Ecow::from("%rdi"),
-
-            (SI, 1) => Ecow::from("%sil"),
-            (SI, 2) => Ecow::from("%si"),
-            (SI, 4) => Ecow::from("%esi"),
-            (SI, _) => Ecow::from("%rsi"),
-
-            (R8, 1) => Ecow::from("%r8b"),
-            (R8, 2) => Ecow::from("%r8w"),
-            (R8, 4) => Ecow::from("%r8d"),
-            (R8, _) => Ecow::from("%r8"),
-
-            (R9, 1) => Ecow::from("%r9b"),
-            (R9, 2) => Ecow::from("%r9w"),
-            (R9, 4) => Ecow::from("%r9d"),
-            (R9, _) => Ecow::from("%r9"),
-
-            (R10, 1) => Ecow::from("%r10b"),
-            (R10, 2) => Ecow::from("%r10w"),
-            (R10, 4) => Ecow::from("%r10d"),
-            (R10, _) => Ecow::from("%r10"),
-
-            (R11, 1) => Ecow::from("%r11b"),
-            (R11, 2) => Ecow::from("%r11w"),
-            (R11, 4) => Ecow::from("%r11d"),
-            (R11, _) => Ecow::from("%r11"),
-
-            (CX, 1) => Ecow::from("%cl"),
-            (CX, 2) => Ecow::from("%cx"),
-            (CX, 4) => Ecow::from("%ecx"),
-            (CX, _) => Ecow::from("%rcx"),
-
-            (SP, 2) => Ecow::from("%sp"),
-            (SP, 4) => Ecow::from("%esp"),
-            (SP, _) => Ecow::from("%rsp"),
+            (AX, 1) => "%al",   (AX, 2) => "%ax",   (AX, 4) => "%eax",  (AX, 8) => "%rax",
+            (DX, 1) => "%dl",   (DX, 2) => "%dx",   (DX, 4) => "%edx",  (DX, 8) => "%rdx",
+            (DI, 1) => "%dil",  (DI, 2) => "%di",   (DI, 4) => "%edi",  (DI, 8) => "%rdi",
+            (SI, 1) => "%sil",  (SI, 2) => "%si",   (SI, 4) => "%esi",  (SI, 8) => "%rsi",
+            (R8, 1) => "%r8b",  (R8, 2) => "%r8w",  (R8, 4) => "%r8d",  (R8, 8) => "%r8",
+            (R9, 1) => "%r9b",  (R9, 2) => "%r9w",  (R9, 4) => "%r9d",  (R9, 8) => "%r9",
+            (R10,1) => "%r10b", (R10,2) => "%r10w", (R10,4) => "%r10d", (R10,8) => "%r10",
+            (R11,1) => "%r11b", (R11,2) => "%r11w", (R11,4) => "%r11d", (R11,8) => "%r11",
+            (CX, 1) => "%cl",   (CX, 2) => "%cx",   (CX, 4) => "%ecx",  (CX, 8) => "%rcx",
+       /* stack pointer */      (SP, 2) => "%sp",   (SP, 4) => "%esp",  (SP, 8) => "%rsp",
+            _ => unreachable!()
         }
     }
 }
@@ -557,14 +552,14 @@ pub enum CondCode {
 }
 use CondCode::*;
 impl CondCode {
-    fn emit_code(self) -> Ecow {
+    fn emit_code(self) -> &'static str {
         match self {
-            Self::E => Ecow::from("e"),
-            Self::NE => Ecow::from("ne"),
-            Self::L => Ecow::from("l"),
-            Self::LE => Ecow::from("le"),
-            Self::G => Ecow::from("g"),
-            Self::GE => Ecow::from("ge"),
+            Self::E => "e",
+            Self::NE => "ne",
+            Self::L => "l",
+            Self::LE => "le",
+            Self::G => "g",
+            Self::GE => "ge",
         }
     }
 }

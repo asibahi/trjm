@@ -81,7 +81,7 @@ fn preprocess(input: &PathBuf) -> Result<PathBuf, ExitCode> {
         duct::cmd!("gcc", "-E", "-P", input, "-o", &output).unchecked().stderr_capture().run();
     match cmd {
         Ok(o) if !o.status.success() => {
-            eprintln!("preprocessor failed:\n{}", String::from_utf8_lossy(&o.stdout));
+            eprintln!("preprocessor failed:\n{}", String::from_utf8_lossy(&o.stderr));
             Err(ExitCode::from(41))
         }
         Err(e) => {
@@ -100,7 +100,7 @@ fn assemble(input: &PathBuf, object_file: bool) -> Result<PathBuf, ExitCode> {
 
     match cmd {
         Ok(o) if !o.status.success() => {
-            eprintln!("assembler failed:'n{}", String::from_utf8_lossy(&o.stdout));
+            eprintln!("assembler failed:\n{}", String::from_utf8_lossy(&o.stderr));
             Err(ExitCode::from(66))
         }
         Err(e) => {

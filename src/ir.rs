@@ -307,6 +307,7 @@ impl ast::TypedExpr {
 }
 
 impl ast::Expr {
+    #[allow(clippy::too_many_lines)]
     fn to_ir(
         &self,
         instrs: &mut Vec<Instr>,

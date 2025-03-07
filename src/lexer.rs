@@ -347,7 +347,7 @@ mod tests {
         match number(i).expect("illegal literal").1 {
             Token::IntLiteral(i) => i64::from(i),
             Token::LongLiteral(i) => i,
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 }

@@ -107,11 +107,16 @@ pub enum StaticInit {
     Int(i32),
     Long(i64),
 }
+impl StaticInit {
+    pub fn is_zero(self) -> bool {
+        matches!(self, StaticInit::Int(0) | StaticInit::Long(0))
+    }
+}
 impl std::fmt::Display for StaticInit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StaticInit::Int(i) => write!(f, "{i}"),
-            StaticInit::Long(i) => write!(f, "{i}"),
+            StaticInit::Int(i) => write!(f, "long   {i}"),
+            StaticInit::Long(i) => write!(f, "quad   {i}"),
         }
     }
 }

@@ -63,7 +63,7 @@ pub fn compile(input: &PathBuf, mode: Mode) -> Result<PathBuf, u8> {
     let prgm = prgm.compile();
 
     if matches!(mode, Mode::Tac) {
-        eprintln!("{prgm:#?}");
+        eprintln!("{prgm}");
         return Err(0);
     }
 

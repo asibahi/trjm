@@ -1,7 +1,10 @@
 use crate::ast::{self, Const, Namespace, StaticInit, StorageClass, Type, TypeCtx};
 use ecow::{EcoString as Ecow, eco_format};
 use either::Either::{Left, Right};
-use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use std::{
+    fmt::Display,
+    sync::atomic::{AtomicUsize, Ordering::Relaxed},
+};
 
 pub static GEN: AtomicUsize = AtomicUsize::new(0);
 
@@ -10,11 +13,47 @@ pub struct Program {
     pub top_level: Vec<TopLevel>,
     pub symbols: Namespace<TypeCtx>,
 }
+impl Display for Program {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Program:")?;
+        writeln!(f, "\tSymbols:")?;
+        for (name, type_ctx) in &self.symbols {
+            writeln!(f, "\t\t{name:<8} {type_ctx}")?;
+        }
+        writeln!(f)?;
+        for tl in &self.top_level {
+            writeln!(f, "\t{tl}")?;
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum TopLevel {
     Function { name: Ecow, global: bool, params: Vec<Ecow>, body: Vec<Instr> },
     StaticVar { name: Ecow, global: bool, type_: Type, init: StaticInit },
+}
+impl Display for TopLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TopLevel::StaticVar { name, global, type_, init } => {
+                writeln!(f, "Static: {name}. global:{global}. type: {type_}. initial value: {init}")
+            }
+            TopLevel::Function { name, global, params, body } => {
+                write!(f, "Function: {name}. global:{global}. (")?;
+                for param in params {
+                    write!(f, "{param}, ")?;
+                }
+                writeln!(f, ")")?;
+
+                for instr in body {
+                    writeln!(f, "\t\t{instr}")?;
+                }
+
+                Ok(())
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -31,11 +70,42 @@ pub enum Instr {
     Label(Ecow),
     FuncCall { name: Ecow, args: Vec<Value>, dst: Place },
 }
+impl Display for Instr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Instr::Return(value) => write!(f, "return {value}"),
+            Instr::SignExtend { src, dst } => write!(f, "{:<8} <- sign_extend {src}", dst.0),
+            Instr::Truncate { src, dst } => write!(f, "{:<8} <- truncate {src}", dst.0),
+            Instr::Unary { op, src, dst } => write!(f, "{:<8} <- {op} {src}", dst.0),
+            Instr::Binary { op, lhs, rhs, dst } => write!(f, "{:<8} <- {lhs} {op} {rhs}", dst.0),
+            Instr::Copy { src, dst } => write!(f, "{:<8} <- copy {src}", dst.0),
+            Instr::Jump { target } =>                write!(f, "jump     {:<10} -> {target}", ""),
+            Instr::JumpIfZero { cond, target } =>    write!(f, "jump_z   {cond:<10} -> {target}"),
+            Instr::JumpIfNotZero { cond, target } => write!(f, "jump_nz  {cond:<10} -> {target}"),
+            Instr::Label(target) => write!(f, "\tLABEL {target}"),
+            Instr::FuncCall { name, args, dst } => {
+                write!(f, "{:<8} <- call {name} (", dst.0)?;
+                for arg in args {
+                    write!(f, "{arg}, ")?;
+                }
+                write!(f, ")")
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Value {
     Const(Const),
     Var(Place),
+}
+impl Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Const(cnst) => write!(f, "({cnst})"),
+            Value::Var(place) => write!(f, "[{}]", place.0),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +116,15 @@ pub enum UnOp {
     Complement,
     Negate,
     Not,
+}
+impl Display for UnOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UnOp::Complement => write!(f, "~"),
+            UnOp::Negate => write!(f, "-"),
+            UnOp::Not => write!(f, "!"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -69,6 +148,28 @@ pub enum BinOp {
     LessOrEqual,
     GreaterThan,
     GreaterOrEqual,
+}
+impl Display for BinOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BinOp::Add => write!(f, "+"),
+            BinOp::Subtract => write!(f, "-"),
+            BinOp::Multiply => write!(f, "*"),
+            BinOp::Divide => write!(f, "/"),
+            BinOp::Reminder => write!(f, "%"),
+            BinOp::BitAnd => write!(f, "&"),
+            BinOp::BitOr => write!(f, "|"),
+            BinOp::BitXor => write!(f, "^"),
+            BinOp::LeftShift => write!(f, "<<"),
+            BinOp::RightShift => write!(f, ">>"),
+            BinOp::Equal => write!(f, "=="),
+            BinOp::NotEqual => write!(f, "!="),
+            BinOp::LessThan => write!(f, "<"),
+            BinOp::LessOrEqual => write!(f, "<="),
+            BinOp::GreaterThan => write!(f, ">"),
+            BinOp::GreaterOrEqual => write!(f, ">="),
+        }
+    }
 }
 
 // ======

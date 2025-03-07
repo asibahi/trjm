@@ -4,6 +4,7 @@ use either::Either::{self, Left, Right};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::{
     collections::{HashSet, hash_map::Entry},
+    fmt::Write,
     ops::Deref,
     sync::atomic::Ordering::Relaxed,
 };
@@ -26,6 +27,20 @@ impl IdCtx {
 pub struct TypeCtx {
     pub type_: Type,
     pub attr: Attributes,
+}
+impl std::fmt::Display for TypeCtx {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let attr = match self.attr {
+            Func { defined: false, global: true } => "global declaration".into(),
+            Func { defined: false, global: false } => "local declaration".into(),
+            Static { init, global: true } => eco_format!("global {init}"),
+            Static { init, global: false } => eco_format!("inner  {init}"),
+            Local => "local".into(),
+            _ => "".into(),
+        };
+
+        write!(f, "{:<8} {attr}", self.type_)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +85,24 @@ pub enum Type {
     Long,
     Func { params: Vec<Type>, ret: Box<Type> },
 }
+impl std::fmt::Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Type::Int => f.pad("int"),
+            Type::Long => f.pad("long"),
+            Type::Func { params, ret } => {
+                let mut buf = Ecow::new();
+                write!(buf, "func (")?;
+                for param in params {
+                    write!(buf, "{param}, ")?;
+                }
+                write!(buf, ") -> {ret}")?;
+
+                f.pad(&buf)
+            }
+        }
+    }
+}
 
 impl Type {
     fn get_common_type(self, other: Self) -> Self {
@@ -101,6 +134,15 @@ pub enum InitValue {
     NoInit,
 }
 pub use InitValue::*;
+impl std::fmt::Display for InitValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Tentative => write!(f, "tentative"),
+            Initial(init) => write!(f, "declared {init}"),
+            NoInit => write!(f, "uninit"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StaticInit {
@@ -1419,6 +1461,7 @@ pub enum Const {
 
 impl std::fmt::Display for Const {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // this is used for assembly generation for some reason.
         match self {
             Const::Int(i) => write!(f, "{i}"),
             Const::Long(i) => write!(f, "{i}"),

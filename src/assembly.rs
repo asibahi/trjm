@@ -2,17 +2,39 @@
 #![allow(clippy::cast_possible_wrap)]
 
 use crate::{
-    ast::{Attributes, Namespace, TypeCtx},
+    ast::{self, Attributes::*, Namespace, StaticInit, Type, TypeCtx},
     ir,
 };
 use ecow::{EcoString as Ecow, eco_format};
 use either::Either::{self, Left, Right};
 use std::io::Write;
 
+#[derive(Debug, Clone, Copy)]
+enum BSymbol {
+    Obj { type_: AsmType, is_static: bool },
+    Func { defined: bool },
+}
+impl From<TypeCtx> for BSymbol {
+    fn from(value: TypeCtx) -> Self {
+        let TypeCtx { type_, attr } = value;
+
+        match (type_, attr) {
+            (Type::Func { .. }, Func { defined, .. }) => BSymbol::Func { defined },
+            (_, Func { .. }) | (Type::Func { .. }, _) => unreachable!(),
+
+            (Type::Int, Static { .. }) => BSymbol::Obj { type_: Longword, is_static: true },
+            (Type::Int, Local) => BSymbol::Obj { type_: Longword, is_static: false },
+
+            (Type::Long, Static { .. }) => BSymbol::Obj { type_: Quadword, is_static: true },
+            (Type::Long, Local) => BSymbol::Obj { type_: Quadword, is_static: false },
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Program {
     top_level: Vec<TopLevel>,
-    symbols: Namespace<TypeCtx>,
+    symbols: Namespace<BSymbol>,
 }
 impl Program {
     pub fn fixup_passes(&mut self) {
@@ -24,7 +46,7 @@ impl Program {
         self.top_level.iter().for_each(|tl| tl.emit_code(f));
     }
 
-    fn replace_pseudos(&mut self, symbols: &Namespace<TypeCtx>) {
+    fn replace_pseudos(&mut self, symbols: &Namespace<BSymbol>) {
         self.top_level.iter_mut().for_each(|tl| tl.replace_pseudos(symbols));
     }
 
@@ -33,10 +55,26 @@ impl Program {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum AsmType {
+    Longword,
+    Quadword,
+}
+use AsmType::*;
+
+impl AsmType {
+    fn width(self) -> u8 {
+        match self {
+            Longword => 4,
+            Quadword => 8,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum TopLevel {
     Function { name: Ecow, instrs: Vec<Instr>, stack_size: i32, global: bool },
-    StaticVariable { name: Ecow, global: bool, init: i32 },
+    StaticVariable { name: Ecow, global: bool, init: StaticInit, alignment: i32 },
 }
 
 impl TopLevel {
@@ -54,18 +92,18 @@ impl TopLevel {
 
                 instrs.iter().for_each(|i| i.emit_code(f));
             }
-            TopLevel::StaticVariable { name, global, init } => {
+            TopLevel::StaticVariable { name, global, init, .. } => {
                 if *global {
                     _ = writeln!(f, "\t.globl  _{name}");
                 }
-                if *init == 0 {
+                if *init == StaticInit::Int(0) || *init == StaticInit::Long(0) {
                     _ = writeln!(f, "\t.bss");
                 } else {
                     _ = writeln!(f, "\t.data");
                 }
                 _ = writeln!(f, "\t.balign 4");
                 _ = writeln!(f, "_{name}:");
-                if *init == 0 {
+                if *init == StaticInit::Long(0) || *init == StaticInit::Int(0) {
                     _ = writeln!(f, "\t.zero   4");
                 } else {
                     _ = writeln!(f, "\t.long   {init}");
@@ -74,7 +112,7 @@ impl TopLevel {
         }
     }
 
-    fn replace_pseudos(&mut self, symbols: &Namespace<TypeCtx>) {
+    fn replace_pseudos(&mut self, symbols: &Namespace<BSymbol>) {
         match self {
             TopLevel::Function { instrs, stack_size, .. } => {
                 let mut map = Namespace::default();
@@ -90,19 +128,21 @@ impl TopLevel {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn adjust_instrs(&mut self) {
         '_stack_frame: {
             match self {
                 TopLevel::Function { instrs, stack_size, .. } => {
                     let sd = stack_size.unsigned_abs().next_multiple_of(16);
+                    let instr = Instr::Binary(Operator::Sub, Quadword, Imm(sd.into()), Reg(SP, 8));
 
-                    instrs.insert(0, Instr::AllocateStack(sd));
+                    instrs.insert(0, instr);
                 }
                 TopLevel::StaticVariable { .. } => {}
             }
         }
 
-        '_fixup_instrs: for _ in 0..2 {
+        '_fixup_instrs: for _ in 0..3 {
             let TopLevel::Function { instrs, .. } = self else {
                 break;
             };
@@ -110,20 +150,57 @@ impl TopLevel {
 
             for instr in std::mem::take(instrs) {
                 match instr {
-                    Instr::Mov(Imm(0), dst @ Reg(..)) => {
-                        out.push(Instr::Binary(Operator::Xor, dst.clone(), dst));
+                    Instr::Mov(ty, Imm(0), dst @ Reg(..)) => {
+                        out.push(Instr::Binary(Operator::Xor, ty, dst.clone(), dst));
                     }
-                    Instr::Mov(src @ (Stack(_) | Data(_)), dst @ (Stack(_) | Data(_))) => {
-                        out.extend([Instr::Mov(src, Reg(R10, 4)), Instr::Mov(Reg(R10, 4), dst)]);
+                    Instr::Mov(ty, src @ (Stack(_) | Data(_)), dst @ (Stack(_) | Data(_))) => {
+                        out.extend([
+                            Instr::Mov(ty, src, Reg(R10, ty.width())),
+                            Instr::Mov(ty, Reg(R10, ty.width()), dst),
+                        ]);
                     }
-                    Instr::Cmp(src @ (Stack(_) | Data(_)), dst @ (Stack(_) | Data(_))) => {
-                        out.extend([Instr::Mov(src, Reg(R10, 4)), Instr::Cmp(Reg(R10, 4), dst)]);
+                    Instr::Mov(ty, src @ Imm(i), dst @ (Stack(_) | Data(_)))
+                        if i32::try_from(i).is_err() =>
+                    {
+                        out.extend([
+                            Instr::Mov(ty, src, Reg(R10, ty.width())),
+                            Instr::Mov(ty, Reg(R10, ty.width()), dst),
+                        ]);
                     }
-                    Instr::Cmp(src, dst @ Imm(_)) => {
-                        out.extend([Instr::Mov(dst, Reg(R11, 4)), Instr::Cmp(src, Reg(R11, 4))]);
+                    Instr::Mov(Longword, Imm(i), dst) if i32::try_from(i).is_err() => {
+                        out.push(Instr::Mov(Longword, Imm(i64::from(i as i32)), dst));
                     }
-                    Instr::Idiv(v @ Imm(_)) => {
-                        out.extend([Instr::Mov(v, Reg(R10, 4)), Instr::Idiv(Reg(R10, 4))]);
+                    Instr::Cmp(ty, src @ Imm(i), dst @ (Stack(_) | Data(_)))
+                        if i32::try_from(i).is_err() =>
+                    {
+                        out.extend([
+                            Instr::Mov(ty, src, Reg(R10, ty.width())),
+                            Instr::Cmp(ty, Reg(R10, ty.width()), dst),
+                        ]);
+                    }
+                    Instr::Cmp(ty, src @ (Stack(_) | Data(_)), dst @ (Stack(_) | Data(_))) => {
+                        out.extend([
+                            Instr::Mov(ty, src, Reg(R10, ty.width())),
+                            Instr::Cmp(ty, Reg(R10, ty.width()), dst),
+                        ]);
+                    }
+                    Instr::Cmp(ty, src, dst @ Imm(_)) => {
+                        out.extend([
+                            Instr::Mov(ty, dst, Reg(R11, ty.width())),
+                            Instr::Cmp(ty, src, Reg(R11, ty.width())),
+                        ]);
+                    }
+                    Instr::Push(src @ Imm(i)) if i32::try_from(i).is_err() => {
+                        out.extend([
+                            Instr::Mov(Quadword, src, Reg(R10, 8)),
+                            Instr::Push(Reg(R10, 8)),
+                        ]);
+                    }
+                    Instr::Idiv(ty, v @ Imm(_)) => {
+                        out.extend([
+                            Instr::Mov(ty, v, Reg(R10, ty.width())),
+                            Instr::Idiv(ty, Reg(R10, ty.width())),
+                        ]);
                     }
                     Instr::Binary(
                         opp @ (Operator::Add
@@ -131,26 +208,56 @@ impl TopLevel {
                         | Operator::And
                         | Operator::Or
                         | Operator::Xor),
+                        ty,
+                        src @ Imm(i),
+                        dst,
+                    ) if i32::try_from(i).is_err() => out.extend([
+                        Instr::Mov(ty, src, Reg(R10, ty.width())),
+                        Instr::Binary(opp, ty, Reg(R10, 4).align_width(ty), dst),
+                    ]),
+                    Instr::Binary(
+                        opp @ (Operator::Add
+                        | Operator::Sub
+                        | Operator::And
+                        | Operator::Or
+                        | Operator::Xor),
+                        ty,
                         src @ (Stack(_) | Data(_)),
                         dst @ (Stack(_) | Data(_)),
                     ) => out.extend([
-                        Instr::Mov(src, Reg(R10, 4)),
-                        Instr::Binary(opp, Reg(R10, 4), dst),
+                        Instr::Mov(ty, src, Reg(R10, ty.width())),
+                        Instr::Binary(opp, ty, Reg(R10, 4).align_width(ty), dst),
                     ]),
-                    Instr::Binary(Operator::Mul, src, dst @ (Stack(_) | Data(_))) => out.extend([
-                        Instr::Mov(dst.clone(), Reg(R11, 4)),
-                        Instr::Binary(Operator::Mul, src, Reg(R11, 4)),
-                        Instr::Mov(Reg(R11, 4), dst),
-                    ]),
+                    Instr::Binary(Operator::Mul, ty, src, dst @ (Stack(_) | Data(_))) => out
+                        .extend([
+                            Instr::Mov(ty, dst.clone(), Reg(R11, ty.width())),
+                            Instr::Binary(Operator::Mul, ty, src, Reg(R11, ty.width())),
+                            Instr::Mov(ty, Reg(R11, ty.width()), dst),
+                        ]),
                     Instr::Binary(
                         opp @ (Operator::Shl | Operator::Shr),
+                        ty,
                         src,
                         dst @ (Stack(_) | Data(_)),
                     ) if src != Reg(CX, 1) => {
                         out.extend([
-                            Instr::Mov(src, Reg(CX, 4)),
-                            Instr::Binary(opp, Reg(CX, 1), dst),
+                            Instr::Mov(ty, src, Reg(CX, ty.width())),
+                            Instr::Binary(opp, ty, Reg(CX, 1), dst),
                         ]);
+                    }
+                    Instr::Movsx(src @ Imm(_), dst) => {
+                        // maybe it is better to split it in two passes?
+                        out.extend([
+                            Instr::Mov(Longword, src, Reg(R10, 4)),
+                            Instr::Movsx(Reg(R10, 4), dst),
+                        ]);
+                    }
+                    Instr::Movsx(src, dst @ (Stack(_) | Data(_))) => {
+                        out.extend([
+                            Instr::Movsx(src, Reg(R11, 8)),
+                            Instr::Mov(Quadword, Reg(R11, 8), dst),
+                        ]);
+                        // todo
                     }
                     other => out.push(other),
                 }
@@ -163,18 +270,17 @@ impl TopLevel {
 
 #[derive(Debug, Clone)]
 pub enum Instr {
-    Mov(Operand, Operand),
-    Unary(Operator, Operand),
-    Binary(Operator, Operand, Operand),
-    Cmp(Operand, Operand),
-    Idiv(Operand),
-    Cdq,
+    Mov(AsmType, Operand, Operand),
+    Movsx(Operand, Operand),
+    Unary(Operator, AsmType, Operand),
+    Binary(Operator, AsmType, Operand, Operand),
+    Cmp(AsmType, Operand, Operand),
+    Idiv(AsmType, Operand),
+    Cdq(AsmType),
     Jmp(Ecow),
     JmpCC(CondCode, Ecow),
     SetCC(CondCode, Operand),
     Label(Ecow),
-    AllocateStack(u32),
-    DeallocateStack(u32),
     Push(Operand),
     Call(Ecow),
     Ret,
@@ -182,35 +288,28 @@ pub enum Instr {
 impl Instr {
     fn emit_code(&self, f: &mut impl Write) {
         match self {
-            Self::Mov(src, dst) => {
+            Self::Mov(_, src, dst) => {
                 let src = src.emit_code() + ",";
                 let dst = dst.emit_code();
 
                 _ = writeln!(f, "\tmovl    {src:<7} {dst}");
             }
-            Self::Unary(un_op, operand) => {
+            Self::Unary(un_op, _, operand) => {
                 let uo = un_op.emit_code();
                 let op = operand.emit_code();
 
                 _ = writeln!(f, "\t{uo:<7} {op}");
             }
-            Self::Binary(bin_op, op1, op2) => {
+            Self::Binary(bin_op, _, op1, op2) => {
                 let bo = bin_op.emit_code();
                 let o1 = op1.emit_code() + ",";
                 let o2 = op2.emit_code();
 
                 _ = writeln!(f, "\t{bo:<7} {o1:<7} {o2}");
             }
-            Self::Idiv(op) => _ = writeln!(f, "\tidivl    {}", op.emit_code()),
+            Self::Idiv(_, op) => _ = writeln!(f, "\tidivl    {}", op.emit_code()),
 
-            Self::Cdq => _ = writeln!(f, "\tcdq"),
-
-            Self::AllocateStack(i) => {
-                _ = writeln!(f, "\tsubq    {:<7} %rsp", Imm(*i as i32).emit_code() + ",");
-            }
-            Self::DeallocateStack(i) => {
-                _ = writeln!(f, "\taddq    {:<7} %rsp", Imm(*i as i32).emit_code() + ",");
-            }
+            Self::Cdq(_) => _ = writeln!(f, "\tcdq"),
 
             Self::Push(op) => _ = writeln!(f, "\tpushq   {}", op.emit_code()),
             Self::Call(label) => _ = writeln!(f, "\tcall    _{label}"),
@@ -220,7 +319,7 @@ impl Instr {
                 _ = writeln!(f, "\tpopq    %rbp");
                 _ = writeln!(f, "\tret");
             }
-            Self::Cmp(op1, op2) => {
+            Self::Cmp(_, op1, op2) => {
                 let op1 = op1.emit_code() + ",";
                 let op2 = op2.emit_code();
 
@@ -238,6 +337,7 @@ impl Instr {
                 _ = writeln!(f, "\tj{cond:<6} .L{label}");
             }
             Self::Label(label) => _ = writeln!(f, ".L{label}:"),
+            Self::Movsx(..) => todo!(),
         }
     }
 
@@ -245,21 +345,26 @@ impl Instr {
         &mut self,
         map: &mut Namespace<i32>,
         stack_depth: &mut i32,
-        symbols: &Namespace<TypeCtx>,
+        symbols: &Namespace<BSymbol>,
     ) {
         match self {
-            Self::Unary(_, opp) | Self::Idiv(opp) | Self::SetCC(_, opp) => {
+            Self::Unary(_, _, opp) | Self::Idiv(_, opp) | Self::SetCC(_, opp) => {
                 opp.replace_pseudos(map, stack_depth, symbols);
             }
-            Self::Binary(_, opp1, opp2) | Self::Mov(opp1, opp2) | Self::Cmp(opp1, opp2) => {
+            Self::Binary(_, _, opp1, opp2)
+            | Self::Mov(_, opp1, opp2)
+            | Self::Cmp(_, opp1, opp2) => {
                 opp1.replace_pseudos(map, stack_depth, symbols);
                 opp2.replace_pseudos(map, stack_depth, symbols);
             }
             Self::Push(opp) => opp.replace_pseudos(map, stack_depth, symbols),
 
-            Self::Cdq
-            | Self::AllocateStack(_)
-            | Self::DeallocateStack(_)
+            Self::Movsx(op1, op2) => {
+                op1.replace_pseudos(map, stack_depth, symbols);
+                op2.replace_pseudos(map, stack_depth, symbols);
+            }
+
+            Self::Cdq(_)
             | Self::Ret
             | Self::Jmp(..)
             | Self::JmpCC(..)
@@ -271,14 +376,22 @@ impl Instr {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Operand {
-    Imm(i32),
-    Reg(Register, usize),
+    Imm(i64),
+    Reg(Register, u8),
     Pseudo(Ecow),
     Stack(i32),
     Data(Ecow),
 }
 use Operand::*;
 impl Operand {
+    fn align_width(self, ty: AsmType) -> Self {
+        match (self, ty) {
+            (Reg(r, _), Longword) => Reg(r, 4),
+            (Reg(r, _), Quadword) => Reg(r, 8),
+            (any, _) => any,
+        }
+    }
+
     fn emit_code(&self) -> Ecow {
         match self {
             Imm(i) => eco_format!("${i}"),
@@ -294,7 +407,7 @@ impl Operand {
         &mut self,
         map: &mut Namespace<i32>,
         stack_depth: &mut i32,
-        symbols: &Namespace<TypeCtx>,
+        symbols: &Namespace<BSymbol>,
     ) {
         let Pseudo(name) = self else {
             return;
@@ -302,10 +415,26 @@ impl Operand {
 
         let mut new_place = if map.contains_key(name) {
             Stack(map[name])
-        } else if symbols.get(name).is_some_and(|tc| matches!(tc.attr, Attributes::Static { .. })) {
+        } else if symbols
+            .get(name)
+            .is_some_and(|tc| matches!(tc, BSymbol::Obj { is_static: true, .. }))
+        {
             Data(name.clone())
         } else {
-            *stack_depth -= 4;
+            let Some(BSymbol::Obj { type_, .. }) = symbols.get(&*name) else { unreachable!() };
+
+            let curr_depth = *stack_depth;
+            match (curr_depth.abs() % 8, type_) {
+                (0, Quadword) => *stack_depth -= 8,
+                (v, Quadword) => *stack_depth -= 8 + (8 - v),
+                (_, Longword) => *stack_depth -= 4,
+            }
+            // do i need this assertion?
+            match type_ {
+                Longword => assert!(stack_depth.abs() % 4 == 0),
+                Quadword => assert!(stack_depth.abs() % 8 == 0),
+            }
+
             map.insert(name.clone(), *stack_depth);
             Stack(*stack_depth)
         };
@@ -357,11 +486,12 @@ pub enum Register {
     R10,
     R11,
     CX,
+    SP,
 }
 const ARG_REGISTERS: [Register; 6] = [DI, SI, DX, CX, R8, R9];
 use Register::*;
 impl Register {
-    fn emit_code(self, byte_size: usize) -> Ecow {
+    fn emit_code(self, byte_size: u8) -> Ecow {
         assert!(byte_size == 1 || byte_size == 2 || byte_size == 4 || byte_size == 8);
         match (self, byte_size) {
             (AX, 1) => Ecow::from("%al"),
@@ -408,6 +538,10 @@ impl Register {
             (CX, 2) => Ecow::from("%cx"),
             (CX, 4) => Ecow::from("%ecx"),
             (CX, _) => Ecow::from("%rcx"),
+
+            (SP, 2) => Ecow::from("%sp"),
+            (SP, 4) => Ecow::from("%esp"),
+            (SP, _) => Ecow::from("%rsp"),
         }
     }
 }
@@ -437,176 +571,238 @@ impl CondCode {
 
 // =========
 
-pub trait ToAsm: std::fmt::Debug + Clone {
-    type Output;
-    fn to_asm(&self) -> Self::Output;
-}
-impl ToAsm for () {
-    type Output = ();
-    fn to_asm(&self) -> Self::Output {}
-}
-impl<T> ToAsm for Vec<T>
-where
-    T: ToAsm,
-{
-    type Output = Vec<T::Output>;
-    fn to_asm(&self) -> Self::Output {
-        self.iter().map(ToAsm::to_asm).collect()
+impl ir::Program {
+    pub fn to_asm(&self) -> Program {
+        // different order from the book
+        let symbols = self.symbols.iter().map(|(k, v)| (k.clone(), v.clone().into())).collect();
+        let top_level = self.top_level.iter().map(|tl| tl.to_asm(&symbols)).collect();
+
+        Program { top_level, symbols }
     }
 }
 
-impl ToAsm for ir::Program {
-    type Output = Program;
-    fn to_asm(&self) -> Self::Output {
-        Program { top_level: self.top_level.to_asm(), symbols: self.symbols.clone() }
-    }
-}
-
-impl ToAsm for ir::TopLevel {
-    type Output = TopLevel;
-    fn to_asm(&self) -> Self::Output {
+impl ir::TopLevel {
+    fn to_asm(&self, symbols: &Namespace<BSymbol>) -> TopLevel {
         match self {
             ir::TopLevel::Function { name, global, params, body } => {
                 let instrs = ARG_REGISTERS
                     .into_iter()
-                    .map(|r| Reg(r, 4))
+                    .map(|r| Reg(r, 0))
                     .chain((16..).step_by(8).map(Stack))
                     .zip(params.clone())
-                    .map(|(src, param)| Instr::Mov(src, Pseudo(param)))
-                    .chain(body.iter().flat_map(ToAsm::to_asm))
+                    .map(|(src, param)| {
+                        let Some(BSymbol::Obj { type_, .. }) = symbols.get(&param) else {
+                            unreachable!()
+                        };
+
+                        Instr::Mov(*type_, src.align_width(*type_), Pseudo(param))
+                    })
+                    .chain(body.iter().flat_map(|e| e.to_asm(symbols)))
                     .collect();
 
                 TopLevel::Function { name: name.clone(), instrs, stack_size: 0, global: *global }
             }
-            ir::TopLevel::StaticVar { name, global, .. } => {
-                TopLevel::StaticVariable { name: name.clone(), global: *global, init: todo!() }
-            }
+            ir::TopLevel::StaticVar { name, global, type_, init } => TopLevel::StaticVariable {
+                name: name.clone(),
+                global: *global,
+                init: *init,
+                alignment: match type_ {
+                    Type::Int => 4,
+                    Type::Long => 8,
+                    Type::Func { .. } => unreachable!(),
+                },
+            },
         }
     }
 }
 
-impl ToAsm for ir::Instr {
-    type Output = Vec<Instr>;
+impl ir::Instr {
     #[allow(clippy::too_many_lines)]
-    fn to_asm(&self) -> Self::Output {
+    fn to_asm(&self, symbols: &Namespace<BSymbol>) -> Vec<Instr> {
         match self {
             Self::Return(value) => {
-                vec![Instr::Mov(value.to_asm(), Operand::Reg(Register::AX, 4)), Instr::Ret]
+                let ty = value.to_asm_type(symbols);
+                vec![
+                    Instr::Mov(ty, value.to_asm(), Operand::Reg(Register::AX, ty.width())),
+                    Instr::Ret,
+                ]
             }
 
-            Self::SignExtend { .. } => todo!(),
-            Self::Truncate { .. } => todo!(),
+            Self::SignExtend { src, dst } => vec![Instr::Movsx(src.to_asm(), dst.to_asm())],
+            Self::Truncate { src, dst } => vec![Instr::Mov(Longword, src.to_asm(), dst.to_asm())],
 
             Self::Unary { op: ir::UnOp::Not, src, dst } => {
+                let src_ty = src.to_asm_type(symbols);
+                let Some(BSymbol::Obj { type_: dst_ty, .. }) = symbols.get(&dst.0) else {
+                    unreachable!()
+                };
                 let dst = dst.to_asm();
+
                 vec![
-                    Instr::Cmp(Operand::Imm(0), src.to_asm()),
-                    Instr::Mov(Operand::Imm(0), dst.clone()),
+                    Instr::Cmp(src_ty, Operand::Imm(0), src.to_asm()),
+                    Instr::Mov(*dst_ty, Operand::Imm(0), dst.clone()),
                     Instr::SetCC(E, dst),
                 ]
             }
             Self::Unary { op, src, dst } => {
+                let src_ty = src.to_asm_type(symbols);
                 let dst = dst.to_asm();
-                vec![Instr::Mov(src.to_asm(), dst.clone()), Instr::Unary(op.to_asm(), dst)]
+                vec![
+                    Instr::Mov(src_ty, src.to_asm(), dst.clone()),
+                    Instr::Unary(op.to_asm(), src_ty, dst),
+                ]
             }
-            Self::Binary { op, lhs, rhs, dst } => match op {
-                ir::BinOp::Add
-                | ir::BinOp::Subtract
-                | ir::BinOp::Multiply
-                | ir::BinOp::BitAnd
-                | ir::BinOp::BitOr
-                | ir::BinOp::BitXor
-                | ir::BinOp::LeftShift
-                | ir::BinOp::RightShift => {
-                    let dst = dst.to_asm();
-                    vec![
-                        Instr::Mov(lhs.to_asm(), dst.clone()),
-                        Instr::Binary(op.to_asm().unwrap_left(), rhs.to_asm(), dst),
-                    ]
+            Self::Binary { op, lhs, rhs, dst } => {
+                let src_ty = lhs.to_asm_type(symbols);
+                match op {
+                    ir::BinOp::Add
+                    | ir::BinOp::Subtract
+                    | ir::BinOp::Multiply
+                    | ir::BinOp::BitAnd
+                    | ir::BinOp::BitOr
+                    | ir::BinOp::BitXor
+                    | ir::BinOp::LeftShift
+                    | ir::BinOp::RightShift => {
+                        let dst = dst.to_asm();
+                        vec![
+                            Instr::Mov(src_ty, lhs.to_asm(), dst.clone()),
+                            Instr::Binary(op.to_asm().unwrap_left(), src_ty, rhs.to_asm(), dst),
+                        ]
+                    }
+                    ir::BinOp::Divide | ir::BinOp::Reminder => {
+                        let res = match op {
+                            ir::BinOp::Divide => Register::AX,
+                            ir::BinOp::Reminder => Register::DX,
+                            _ => unreachable!(),
+                        };
+                        vec![
+                            Instr::Mov(
+                                src_ty,
+                                lhs.to_asm(),
+                                Operand::Reg(Register::AX, 4).align_width(src_ty),
+                            ),
+                            Instr::Cdq(src_ty),
+                            Instr::Idiv(src_ty, rhs.to_asm()),
+                            Instr::Mov(
+                                src_ty,
+                                Operand::Reg(res, 4).align_width(src_ty),
+                                dst.to_asm(),
+                            ),
+                        ]
+                    }
+                    ir::BinOp::Equal
+                    | ir::BinOp::NotEqual
+                    | ir::BinOp::LessThan
+                    | ir::BinOp::LessOrEqual
+                    | ir::BinOp::GreaterThan
+                    | ir::BinOp::GreaterOrEqual => {
+                        let Some(BSymbol::Obj { type_: dst_ty, .. }) = symbols.get(&dst.0) else {
+                            unreachable!()
+                        };
+                        let dst = dst.to_asm();
+
+                        vec![
+                            Instr::Cmp(src_ty, rhs.to_asm(), lhs.to_asm()),
+                            Instr::Mov(*dst_ty, Operand::Imm(0), dst.clone()),
+                            Instr::SetCC(op.to_asm().unwrap_right(), dst),
+                        ]
+                    }
                 }
-                ir::BinOp::Divide | ir::BinOp::Reminder => {
-                    let res = match op {
-                        ir::BinOp::Divide => Register::AX,
-                        ir::BinOp::Reminder => Register::DX,
-                        _ => unreachable!(),
-                    };
-                    vec![
-                        Instr::Mov(lhs.to_asm(), Operand::Reg(Register::AX, 4)),
-                        Instr::Cdq,
-                        Instr::Idiv(rhs.to_asm()),
-                        Instr::Mov(Operand::Reg(res, 4), dst.to_asm()),
-                    ]
-                }
-                ir::BinOp::Equal
-                | ir::BinOp::NotEqual
-                | ir::BinOp::LessThan
-                | ir::BinOp::LessOrEqual
-                | ir::BinOp::GreaterThan
-                | ir::BinOp::GreaterOrEqual => {
-                    let dst = dst.to_asm();
-                    vec![
-                        Instr::Cmp(rhs.to_asm(), lhs.to_asm()),
-                        Instr::Mov(Operand::Imm(0), dst.clone()),
-                        Instr::SetCC(op.to_asm().unwrap_right(), dst),
-                    ]
-                }
-            },
-            Self::Copy { src, dst } => vec![Instr::Mov(src.to_asm(), dst.to_asm())],
+            }
+            Self::Copy { src, dst } => {
+                let src_ty = src.to_asm_type(symbols);
+                vec![Instr::Mov(src_ty, src.to_asm(), dst.to_asm())]
+            }
             Self::Jump { target } => vec![Instr::Jmp(target.clone())],
             Self::JumpIfZero { cond, target } => {
-                vec![Instr::Cmp(Operand::Imm(0), cond.to_asm()), Instr::JmpCC(E, target.clone())]
+                let cond_ty = cond.to_asm_type(symbols);
+                vec![
+                    Instr::Cmp(cond_ty, Operand::Imm(0), cond.to_asm()),
+                    Instr::JmpCC(E, target.clone()),
+                ]
             }
             Self::JumpIfNotZero { cond, target } => {
-                vec![Instr::Cmp(Operand::Imm(0), cond.to_asm()), Instr::JmpCC(NE, target.clone())]
+                let cond_ty = cond.to_asm_type(symbols);
+                vec![
+                    Instr::Cmp(cond_ty, Operand::Imm(0), cond.to_asm()),
+                    Instr::JmpCC(NE, target.clone()),
+                ]
             }
             Self::Label(name) => vec![Instr::Label(name.clone())],
             Self::FuncCall { name, args, dst } => {
+                let Some(BSymbol::Obj { type_: dst_ty, .. }) = symbols.get(&dst.0) else {
+                    unreachable!()
+                };
                 let (reg_args, stack_args) =
                     args.split_at_checked(6).unwrap_or((args.as_slice(), &[]));
 
                 (stack_args.len() % 2 != 0)
-                    .then_some(Instr::AllocateStack(8))
+                    .then_some(Instr::Binary(Operator::Sub, Quadword, Imm(8), Reg(SP, 8)))
                     .into_iter()
-                    .chain(
-                        ARG_REGISTERS
-                            .into_iter()
-                            .zip(reg_args)
-                            .map(|(reg, arg)| Instr::Mov(arg.to_asm(), Reg(reg, 4))),
-                    )
-                    .chain(stack_args.iter().rev().flat_map(|arg| match arg.to_asm() {
-                        opp @ Imm(_) => vec![Instr::Push(opp)],
-                        Reg(r, 4) => vec![Instr::Push(Reg(r, 8))],
-                        opp => vec![Instr::Mov(opp, Reg(AX, 4)), Instr::Push(Reg(AX, 8))],
+                    .chain(ARG_REGISTERS.into_iter().zip(reg_args).map(|(reg, arg)| {
+                        let arg_ty = arg.to_asm_type(symbols);
+                        Instr::Mov(arg_ty, arg.to_asm(), Reg(reg, 4).align_width(arg_ty))
+                    }))
+                    .chain(stack_args.iter().rev().flat_map(|arg| {
+                        let arg_ty = arg.to_asm_type(symbols);
+
+                        match arg.to_asm() {
+                            opp @ Imm(_) => vec![Instr::Push(opp)],
+                            Reg(r, _) => vec![Instr::Push(Reg(r, 8))],
+                            opp => vec![
+                                Instr::Mov(arg_ty, opp, Reg(AX, 0).align_width(arg_ty)),
+                                Instr::Push(Reg(AX, 8)),
+                            ],
+                        }
                     }))
                     .chain([Instr::Call(name.clone())])
-                    .chain((!stack_args.is_empty()).then_some(Instr::DeallocateStack(
-                        8 * stack_args.len() as u32
-                            + (stack_args.len() % 2 != 0).then_some(8).unwrap_or_default(),
+                    .chain((!stack_args.is_empty()).then_some(Instr::Binary(
+                        Operator::Add,
+                        Quadword,
+                        Imm(8 * stack_args.len() as i64
+                            + (stack_args.len() % 2 != 0).then_some(8).unwrap_or_default()),
+                        Reg(SP, 8),
                     )))
-                    .chain([Instr::Mov(Reg(AX, 4), dst.to_asm())])
+                    .chain([Instr::Mov(*dst_ty, Reg(AX, 0).align_width(*dst_ty), dst.to_asm())])
                     .collect()
             }
         }
     }
 }
-impl ToAsm for ir::Value {
-    type Output = Operand;
-    fn to_asm(&self) -> Self::Output {
+impl ir::Value {
+    fn to_asm(&self) -> Operand {
         match self {
-            Self::Const(_) => Operand::Imm(todo!()),
+            Self::Const(ast::Const::Int(i)) => Operand::Imm(i64::from(*i)),
+            Self::Const(ast::Const::Long(i)) => Operand::Imm(*i),
             Self::Var(place) => place.to_asm(),
         }
     }
+    fn to_asm_type(&self, symbols: &Namespace<BSymbol>) -> AsmType {
+        match self {
+            ir::Value::Const(c) => c.to_asm_type(),
+
+            ir::Value::Var(ir::Place(ident)) => match symbols.get(ident) {
+                Some(BSymbol::Obj { type_, .. }) => *type_,
+                e => unreachable!("{e:?}"),
+            },
+        }
+    }
 }
-impl ToAsm for ir::Place {
-    type Output = Operand;
-    fn to_asm(&self) -> Self::Output {
+impl ast::Const {
+    fn to_asm_type(self) -> AsmType {
+        match self {
+            ast::Const::Int(_) => Longword,
+            ast::Const::Long(_) => Quadword,
+        }
+    }
+}
+impl ir::Place {
+    fn to_asm(&self) -> Operand {
         Operand::Pseudo(self.0.clone())
     }
 }
-impl ToAsm for ir::UnOp {
-    type Output = Operator;
-    fn to_asm(&self) -> Self::Output {
+impl ir::UnOp {
+    fn to_asm(self) -> Operator {
         match self {
             Self::Complement => Operator::Not,
             Self::Negate => Operator::Neg,
@@ -614,9 +810,8 @@ impl ToAsm for ir::UnOp {
         }
     }
 }
-impl ToAsm for ir::BinOp {
-    type Output = Either<Operator, CondCode>;
-    fn to_asm(&self) -> Self::Output {
+impl ir::BinOp {
+    fn to_asm(self) -> Either<Operator, CondCode> {
         match self {
             Self::Add => Left(Operator::Add),
             Self::Subtract => Left(Operator::Sub),

@@ -384,7 +384,12 @@ impl ast::Expr {
 
                 let end_label = eco_format!("end.{}", counter);
                 let e2_label = eco_format!("e2.{}", counter);
-                let result = Place(eco_format!("ter{}", counter));
+
+                let result = make_ir_variable(
+                    "ter",
+                    then.ret.clone().expect("ternary type should be known"),
+                    symbols,
+                );
 
                 let cond = cond.to_ir(instrs, symbols);
                 instrs.push(Instr::JumpIfZero { cond, target: e2_label.clone() });

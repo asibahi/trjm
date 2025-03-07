@@ -6,8 +6,6 @@ mod ir;
 mod lexer;
 mod parser;
 
-use assembly::ToAsm;
-
 #[derive(Clone, Copy)]
 pub enum Mode {
     Lex,

@@ -1,4 +1,4 @@
-use crate::ir::{self, GEN,};
+use crate::ir::{self, GEN};
 use ecow::{EcoString as Ecow, eco_format};
 use either::Either::{self, Left, Right};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -88,10 +88,11 @@ impl Type {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Attributes {
-    Fun { defined: bool, global: bool },
+    Func { defined: bool, global: bool },
     Static { init: InitValue, global: bool },
     Local,
 }
+pub use Attributes::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitValue {
@@ -105,6 +106,14 @@ pub use InitValue::*;
 pub enum StaticInit {
     Int(i32),
     Long(i64),
+}
+impl std::fmt::Display for StaticInit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StaticInit::Int(i) => write!(f, "{i}"),
+            StaticInit::Long(i) => write!(f, "{i}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,10 +224,10 @@ impl VarDecl {
                 // not a constant
                 anyhow::bail!("conflicting type declarations");
             }
-            Some(TypeCtx { attr: Attributes::Local | Attributes::Fun { .. }, .. }) => {
+            Some(TypeCtx { attr: Local | Func { .. }, .. }) => {
                 unreachable!()
             }
-            Some(TypeCtx { attr: Attributes::Static { init: o_i, global: o_g }, .. }) => {
+            Some(TypeCtx { attr: Static { init: o_i, global: o_g }, .. }) => {
                 match self.sc {
                     StorageClass::Extern => global = *o_g,
                     _ if *o_g != global => anyhow::bail!("conflicting variable linkage"),
@@ -236,7 +245,7 @@ impl VarDecl {
 
         symbols.insert(
             self.name.clone(),
-            TypeCtx { type_: self.var_type.clone(), attr: Attributes::Static { init, global } },
+            TypeCtx { type_: self.var_type.clone(), attr: Static { init, global } },
         );
 
         Ok(self)
@@ -253,7 +262,7 @@ impl VarDecl {
                 Entry::Vacant(vac) => {
                     vac.insert(TypeCtx {
                         type_: self.var_type.clone(),
-                        attr: Attributes::Static { init: NoInit, global: true },
+                        attr: Static { init: NoInit, global: true },
                     });
                 }
                 Entry::Occupied(_) => {}
@@ -271,14 +280,14 @@ impl VarDecl {
                     self.name.clone(),
                     TypeCtx {
                         type_: self.var_type.clone(),
-                        attr: Attributes::Static { init: init_value, global: false },
+                        attr: Static { init: init_value, global: false },
                     },
                 );
             }
             StorageClass::None => {
                 symbols.insert(
                     self.name.clone(),
-                    TypeCtx { type_: self.var_type.clone(), attr: Attributes::Local },
+                    TypeCtx { type_: self.var_type.clone(), attr: Local },
                 );
 
                 self.init = match self.init {
@@ -343,13 +352,13 @@ impl FuncDecl {
 
         match symbols.get(&self.name) {
             None => {}
-            Some(TypeCtx { type_: Type::Func { .. }, attr: Attributes::Fun { defined, .. } })
+            Some(TypeCtx { type_: Type::Func { .. }, attr: Func { defined, .. } })
                 if *defined && has_body =>
             {
                 anyhow::bail!("multiple function definitions")
             }
 
-            Some(TypeCtx { type_: Type::Func { .. }, attr: Attributes::Fun { global, .. } })
+            Some(TypeCtx { type_: Type::Func { .. }, attr: Func { global, .. } })
                 if *global && self.sc == StorageClass::Static =>
             {
                 anyhow::bail!("Static function declaration follows non-static")
@@ -357,7 +366,7 @@ impl FuncDecl {
 
             Some(TypeCtx {
                 type_: type_ @ Type::Func { params, .. },
-                attr: Attributes::Fun { defined, global: old_global },
+                attr: Func { defined, global: old_global },
             }) if params.len() == self.params.len() && *type_ == self.fun_type => {
                 already_defined = *defined;
                 global = *old_global;
@@ -369,13 +378,13 @@ impl FuncDecl {
             self.name.clone(),
             TypeCtx {
                 type_: self.fun_type.clone(),
-                attr: Attributes::Fun { defined: already_defined || has_body, global },
+                attr: Func { defined: already_defined || has_body, global },
             },
         );
 
         let body = if let Some(body) = self.body {
             for (param, ty) in self.params.clone().iter().zip(arg_types) {
-                symbols.insert(param.clone(), TypeCtx { type_: ty, attr: Attributes::Local });
+                symbols.insert(param.clone(), TypeCtx { type_: ty, attr: Local });
             }
 
             Some(body.type_check(symbols, *ret_type)?)

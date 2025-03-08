@@ -43,7 +43,7 @@ pub fn compile(input: &PathBuf, mode: Mode) -> Result<PathBuf, u8> {
     };
 
     if matches!(mode, Mode::Parse) {
-        eprintln!("{prgm:#?}");
+        eprintln!("{prgm}");
         return Err(0);
     }
 

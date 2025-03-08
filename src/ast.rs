@@ -4,7 +4,7 @@ use either::Either::{self, Left, Right};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::{
     collections::{HashSet, hash_map::Entry},
-    fmt::Write,
+    fmt::{Display, Formatter, Write},
     ops::Deref,
     sync::atomic::Ordering::Relaxed,
 };
@@ -28,8 +28,8 @@ pub struct TypeCtx {
     pub type_: Type,
     pub attr: Attributes,
 }
-impl std::fmt::Display for TypeCtx {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for TypeCtx {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let attr = match self.attr {
             Func { defined: false, global: true } => "global declaration".into(),
             Func { defined: false, global: false } => "local declaration".into(),
@@ -48,14 +48,22 @@ pub struct Program {
     pub decls: Vec<Decl>,
     pub symbols: Namespace<TypeCtx>,
 }
+impl Display for Program {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "PROGRAM")?;
+        for decl in &self.decls {
+            writeln!(f, "{decl:1}")?;
+        }
+
+        Ok(())
+    }
+}
 impl Program {
     pub fn new(decls: Vec<Decl>) -> Self {
         Self { decls, symbols: Namespace::default() }
     }
 
     pub fn semantic_analysis(mut self) -> anyhow::Result<Self> {
-        // semantic analysis
-
         let mut id_map = Namespace::<IdCtx>::default();
 
         for idx in 0..self.decls.len() {
@@ -85,8 +93,8 @@ pub enum Type {
     Long,
     Func { params: Vec<Type>, ret: Box<Type> },
 }
-impl std::fmt::Display for Type {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for Type {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Type::Int => f.pad("int"),
             Type::Long => f.pad("long"),
@@ -134,8 +142,8 @@ pub enum InitValue {
     NoInit,
 }
 pub use InitValue::*;
-impl std::fmt::Display for InitValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for InitValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Tentative => write!(f, "tentative"),
             Initial(init) => write!(f, "declared {init}"),
@@ -154,8 +162,8 @@ impl StaticInit {
         matches!(self, StaticInit::Int(0) | StaticInit::Long(0))
     }
 }
-impl std::fmt::Display for StaticInit {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for StaticInit {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             StaticInit::Int(i) => write!(f, "long   {i}"),
             StaticInit::Long(i) => write!(f, "quad   {i}"),
@@ -169,6 +177,15 @@ pub enum StorageClass {
     Extern,
     None,
 }
+impl Display for StorageClass {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StorageClass::Static => f.pad("static"),
+            StorageClass::Extern => f.pad("extern"),
+            StorageClass::None => Ok(()),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Scope {
@@ -180,6 +197,17 @@ enum Scope {
 pub enum Decl {
     Func(FuncDecl),
     Var(VarDecl),
+}
+impl Display for Decl {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let indent = f.width().unwrap_or_default();
+        let pad = Ecow::from("\t").repeat(indent);
+
+        match self {
+            Decl::Func(func) => write!(f, "{pad}{func:indent$}"),
+            Decl::Var(var) => write!(f, "{pad}{var:indent$}"),
+        }
+    }
 }
 
 impl Decl {
@@ -247,6 +275,19 @@ pub struct VarDecl {
     pub init: Option<TypedExpr>,
     pub sc: StorageClass,
     pub var_type: Type,
+}
+impl Display for VarDecl {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let ln = eco_format!("{} {} {}", self.sc, self.var_type, self.name);
+        let ln = ln.trim();
+        write!(f, "{ln}",)?;
+
+        if let Some(init) = &self.init {
+            write!(f, " = {init}")?;
+        }
+
+        Ok(())
+    }
 }
 impl VarDecl {
     fn type_check_file(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
@@ -386,6 +427,32 @@ pub struct FuncDecl {
     pub body: Option<Block>,
     pub sc: StorageClass,
     pub fun_type: Type,
+}
+impl Display for FuncDecl {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let indent = f.width().unwrap_or_default();
+        let child = indent + 1;
+
+        let Type::Func { ret, params } = &self.fun_type else { unreachable!() };
+
+        let ln = eco_format!("{} {} {} (", self.sc, ret, self.name);
+        let ln = ln.trim();
+
+        write!(f, "{ln}")?;
+        for (ty, name) in params.iter().zip(&self.params) {
+            write!(f, "{ty} {name}, ")?;
+        }
+        write!(f, ")")?;
+
+        if let Some(body) = &self.body {
+            writeln!(f)?;
+            for item in &body.0 {
+                writeln!(f, "{item:child$}")?;
+            }
+        }
+
+        Ok(())
+    }
 }
 impl FuncDecl {
     fn type_check(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
@@ -541,6 +608,15 @@ impl FuncDecl {
 pub enum BlockItem {
     S(Stmt),
     D(Decl),
+}
+impl Display for BlockItem {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let indent = f.width().unwrap_or_default();
+        match self {
+            BlockItem::S(stmt) => write!(f, "{stmt:indent$}"),
+            BlockItem::D(decl) => write!(f, "{decl:indent$}"),
+        }
+    }
 }
 impl BlockItem {
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {
@@ -779,6 +855,92 @@ pub enum Stmt {
 
     Null,
 }
+impl Display for Stmt {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let indent = f.width().unwrap_or_default();
+        let child = indent + 1;
+
+        let pad = Ecow::from("\t").repeat(indent);
+
+        let write_body = |body: &Stmt, f: &mut Formatter| match body {
+            Stmt::Compound(_) => write!(f, "{body:indent$}"),
+            _ => write!(f, "{body:child$}"),
+        };
+
+        match self {
+            Stmt::Return(expr) => write!(f, "{pad}return  {expr}"),
+            Stmt::Expression(expr) => write!(f, "{pad}{expr}"),
+            Stmt::If { cond, then, else_ } => {
+                writeln!(f, "{pad}if {cond}")?;
+                write_body(then, f)?;
+                if let Some(else_) = else_ {
+                    writeln!(f, "{pad}else")?;
+                    write_body(else_, f)
+                } else {
+                    Ok(())
+                }
+            }
+            Stmt::Compound(block) => {
+                for item in &block.0 {
+                    writeln!(f, "{item:child$}")?;
+                }
+                Ok(())
+            }
+
+            Stmt::Break(_) => writeln!(f, "{pad}break"),
+            Stmt::Continue(_) => writeln!(f, "{pad}continue"),
+            Stmt::While { cond, body, .. } => {
+                writeln!(f, "{pad}while {cond}")?;
+                write_body(body, f)
+            }
+            Stmt::DoWhile { body, cond, .. } => {
+                writeln!(f, "{pad}do")?;
+                write_body(body, f)?;
+                writeln!(f, "{pad}while {cond}")
+            }
+            Stmt::For { init, cond, post, body, .. } => {
+                write!(f, "{pad}for ")?;
+
+                match init {
+                    Left(init) => write!(f, "{init}")?,
+                    Right(Some(init)) => write!(f, "{init}")?,
+                    Right(None) => write!(f, "---")?,
+                }
+                write!(f, "; ")?;
+                match cond {
+                    Some(cond) => write!(f, "{cond}")?,
+                    None => write!(f, "---")?,
+                }
+                write!(f, "; ")?;
+                match post {
+                    Some(post) => write!(f, "{post}")?,
+                    None => write!(f, "---")?,
+                }
+                writeln!(f)?;
+                write_body(body, f)
+            }
+            Stmt::GoTo(name) => write!(f, "{pad}goto {name}"),
+            Stmt::Label(name, body) => {
+                writeln!(f, "{pad}label {name}:")?;
+                write_body(body, f)
+            }
+            Stmt::Switch { ctrl, body, .. } => {
+                writeln!(f, "{pad}switch {ctrl}:")?;
+                write_body(body, f)
+            }
+            Stmt::Case { cnst, body, .. } => {
+                writeln!(f, "{pad}case {cnst}:")?;
+                write_body(body, f)
+            }
+            Stmt::Default { body, .. } => {
+                writeln!(f, "{pad}default:")?;
+                write_body(body, f)
+            }
+            Stmt::Null => Ok(()),
+        }
+    }
+}
+
 impl Stmt {
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {
         match self {
@@ -931,7 +1093,7 @@ impl Stmt {
                 label,
             }),
 
-            // extra extra credit // Incomplete
+            // extra credit
             Self::Switch { ctrl, body, label, cases } => Ok(Self::Switch {
                 ctrl,
                 body: Box::new(body.resolve_goto_labels(labels, func_name)?),
@@ -1187,6 +1349,11 @@ pub struct TypedExpr {
     pub expr: Expr,
     pub ret: Option<Type>,
 }
+impl Display for TypedExpr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.expr)
+    }
+}
 impl TypedExpr {
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {
         Ok(Self { expr: self.expr.resolve_identifiers(map)?, ret: self.ret })
@@ -1215,6 +1382,29 @@ pub enum Expr {
     Assignemnt(Box<TypedExpr>, Box<TypedExpr>),
     Conditional { cond: Box<TypedExpr>, then: Box<TypedExpr>, else_: Box<TypedExpr> },
     FuncCall { name: Ecow, args: Vec<TypedExpr> },
+}
+impl Display for Expr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Expr::Const(cnst) => write!(f, "{cnst}"),
+            Expr::Var(var) => write!(f, "{var}"),
+            Expr::Cast { target, inner } => write!(f, "({inner} as {target})"),
+            Expr::Unary(op, expr) => write!(f, "({op} {expr})"),
+            Expr::Binary { op, lhs, rhs } => write!(f, "({lhs} {op} {rhs})"),
+            Expr::CompoundAssignment { op, lhs, rhs } => write!(f, "({lhs} {op}= {rhs})"),
+            Expr::Assignemnt(lhs, rhs) => write!(f, "({lhs} <- {rhs})"),
+            Expr::Conditional { cond, then, else_ } => {
+                write!(f, "({cond} ? {then} : {else_})")
+            }
+            Expr::FuncCall { name, args } => {
+                let mut buf = Ecow::new();
+                for arg in args {
+                    write!(buf, "{arg}, ")?;
+                }
+                write!(f, "{name}({buf})")
+            }
+        }
+    }
 }
 impl Expr {
     pub fn dummy_typed(self) -> TypedExpr {
@@ -1485,8 +1675,8 @@ pub enum Const {
     Long(i64),
 }
 
-impl std::fmt::Display for Const {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for Const {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         // this is used for assembly generation for some reason.
         match self {
             Const::Int(i) => write!(f, "{i}"),
@@ -1534,6 +1724,20 @@ pub enum UnaryOp {
     DecPre,
     DecPost,
 }
+impl Display for UnaryOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UnaryOp::Complement => f.pad("~"),
+            UnaryOp::Negate => f.pad("-"),
+            UnaryOp::Not => f.pad("!"),
+            UnaryOp::Plus => f.pad(""),
+            UnaryOp::IncPre => f.pad("++@"),
+            UnaryOp::IncPost => f.pad("@++"),
+            UnaryOp::DecPre => f.pad("--@"),
+            UnaryOp::DecPost => f.pad("@--"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
@@ -1558,4 +1762,28 @@ pub enum BinaryOp {
     BitXor,
     LeftShift,
     RightShift,
+}
+impl Display for BinaryOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BinaryOp::Add => f.pad("+"),
+            BinaryOp::Subtract => f.pad("-"),
+            BinaryOp::Multiply => f.pad("*"),
+            BinaryOp::Divide => f.pad("/"),
+            BinaryOp::Reminder => f.pad("%"),
+            BinaryOp::And => f.pad("&&"),
+            BinaryOp::Or => f.pad("||"),
+            BinaryOp::Equal => f.pad("=="),
+            BinaryOp::NotEqual => f.pad("!="),
+            BinaryOp::LessThan => f.pad("<"),
+            BinaryOp::LessOrEqual => f.pad("<="),
+            BinaryOp::GreaterThan => f.pad(">"),
+            BinaryOp::GreaterOrEqual => f.pad(">="),
+            BinaryOp::BitAnd => f.pad("&"),
+            BinaryOp::BitOr => f.pad("|"),
+            BinaryOp::BitXor => f.pad("^"),
+            BinaryOp::LeftShift => f.pad("<<"),
+            BinaryOp::RightShift => f.pad(">>"),
+        }
+    }
 }

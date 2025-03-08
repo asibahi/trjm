@@ -1,12 +1,15 @@
 #![warn(dead_code)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_possible_wrap)]
 
 use ecow::EcoString as Ecow;
 use nom::{
     AsChar, Finish, IResult, Input, Parser,
     branch::alt,
-    bytes::{tag, take_while},
+    bytes::{tag, tag_no_case, take_while},
     character::{
-        complete::{bin_digit1, hex_digit1, i64, oct_digit0},
+        complete::{bin_digit1, hex_digit1, u64, oct_digit0},
         multispace0, satisfy,
     },
     combinator::{all_consuming, cut, not, recognize, success},
@@ -21,10 +24,14 @@ pub(crate) enum Token {
     Ident(Ecow),
     IntLiteral(i32),
     LongLiteral(i64),
+    UnsignedIntLiteral(u32),
+    UnsignedLongLiteral(u64),
 
     // types
     Int,
     Long,
+    Signed,
+    Unsigned,
 
     // Keywords
     Void, // also doubtful
@@ -243,6 +250,8 @@ token!(
     .map(|s: &str| match s {
         "int" => Token::Int,
         "long" => Token::Long,
+        "signed" => Token::Signed,
+        "unsigned" => Token::Unsigned,
         "void" => Token::Void,
         "return" => Token::Return,
         "if" => Token::If,
@@ -265,13 +274,14 @@ token!(
 macro_rules! radix (
     ($tag: expr, $parser:ident, $radix:literal) =>{
         preceded($tag, cut($parser))
-        .map(|s: &str| i64::from_str_radix(s, $radix).unwrap_or_default())
+        .map(|s: &str| u64::from_str_radix(s, $radix).unwrap_or_default())
     }
 );
 
 #[derive(Debug, Clone, Copy)]
 enum IntType {
-    LongLong,
+    Unsigned,
+    UnsignedLong,
     Long,
     Unknown,
 }
@@ -282,21 +292,24 @@ token!(
         radix!(tag("0x").or(tag("0X")), hex_digit1, 16),
         radix!(tag("0b").or(tag("0B")), bin_digit1, 2),
         radix!(tag("0"), oct_digit0, 8),
-        i64,
+        u64,
     ))
     .and(terminated(
         alt((
-            tag("l").or(tag("L")).map(|_| IntType::Long),
-            tag("ll").or(tag("LL")).map(|_| IntType::LongLong),
+            tag_no_case("ul").or(tag_no_case("lu")).map(|_| IntType::UnsignedLong),
+            tag_no_case("l").map(|_| IntType::Long),
+            tag_no_case("u").map(|_| IntType::Unsigned),
             success(IntType::Unknown)
         )),
         not(satisfy(|c| c == '_' || c.is_alphanum())),
     ))
     .map(|(lit, ty)| match ty {
-        IntType::Long | IntType::LongLong => Token::LongLiteral(lit),
+        IntType::Unsigned => Token::UnsignedIntLiteral(lit as u32),
+        IntType::UnsignedLong => Token::UnsignedLongLiteral(lit),
+        IntType::Long => Token::LongLiteral(lit as i64),
         IntType::Unknown => match i32::try_from(lit) {
             Ok(i) => Token::IntLiteral(i),
-            Err(_) => Token::LongLiteral(lit),
+            Err(_) => Token::LongLiteral(lit as i64),
         },
     })
 );

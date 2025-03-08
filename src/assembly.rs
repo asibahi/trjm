@@ -362,7 +362,7 @@ impl Instr {
                 let cond = cond.emit_code();
                 _ = writeln!(f, "\tj{cond:<6} .L{label}");
             }
-            Self::Label(label) => _ = writeln!(f, ".L{label}:"),
+            Self::Label(label) => _ = writeln!(f, "    .L{label}:"),
             Self::Movsx(src, dst) => {
                 let src = src.emit_code() + ",";
                 let dst = dst.emit_code();

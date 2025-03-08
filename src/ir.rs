@@ -245,7 +245,7 @@ impl ast::Stmt {
         let brk_label = |s| eco_format!("brk.{s}");
         let cntn_label = |s| eco_format!("cntn.{s}");
 
-        let case_label = |s, i| eco_format!("case.{i}.{s}");
+        let case_label = |s, i| eco_format!("case.{i}.{s}").replace("-", "n");
         let dfl_label = |s| eco_format!("dflt.{s}");
 
         match self {
@@ -430,7 +430,7 @@ impl ast::Expr {
                 let src = expr.to_ir(instrs, symbols);
 
                 let dst = make_ir_variable(
-                    "1op",
+                    "unop",
                     expr.ret.clone().expect("unop type must be known"),
                     symbols,
                 );
@@ -448,7 +448,7 @@ impl ast::Expr {
                 let lhs = lhs.to_ir(instrs, symbols);
                 let rhs = rhs.to_ir(instrs, symbols);
 
-                let dst = make_ir_variable("2op", expr_type.clone(), symbols);
+                let dst = make_ir_variable("binop", expr_type.clone(), symbols);
 
                 let op = op.to_ir();
 
@@ -457,9 +457,10 @@ impl ast::Expr {
             }
             Self::Var(id) => Value::Var(Place(id.clone())),
             Self::Assignemnt(place, value) => {
-                // todo double check
                 let ast::Expr::Var(ref dst) = place.expr else {
-                    unreachable!("place expression should be resolved earlier.")
+                    unreachable!(
+                        "assignment place expression should be resolved earlier. {place:?}"
+                    )
                 };
 
                 let rhs = if place.ret == value.ret {
@@ -470,16 +471,15 @@ impl ast::Expr {
                         .to_ir(instrs, symbols)
                 };
 
-                // let rhs = value.to_ir(instrs, symbols);
-
                 instrs.push(Instr::Copy { src: rhs, dst: Place(dst.clone()) });
 
                 Value::Var(Place(dst.clone()))
             }
             Self::CompoundAssignment { op, lhs, rhs } => {
-                // todo double check
                 let ast::Expr::Var(ref dst) = lhs.expr else {
-                    unreachable!("place expression should be resolved earlier.")
+                    unreachable!(
+                        "compound assignment place expression should be resolved earlier. {lhs:?}"
+                    )
                 };
                 let ret = Self::Binary { op: *op, lhs: lhs.clone(), rhs: rhs.clone() }
                     .to_ir(instrs, symbols, expr_type);
@@ -558,7 +558,7 @@ fn postfix_prefix_instrs(
     expr_type: &Type,
 ) -> Value {
     let ast::Expr::Var(ref dst) = expr.expr else {
-        unreachable!("place expression should be resolved earlier.")
+        unreachable!("post/prefix place expression should be resolved earlier. {expr:?}")
     };
 
     let (op, cache) = match op {

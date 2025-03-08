@@ -1078,6 +1078,7 @@ impl Stmt {
                 };
 
                 let value = value.cast_const(switch_type);
+                let cnst = Expr::Const(value).typed(switch_type.clone());
 
                 if !switch_ctx.insert(Some(value)) {
                     anyhow::bail!("case value already exists");
@@ -1356,19 +1357,31 @@ impl Expr {
                     .and_then(|lht| rhs.clone().ret.map(|rht| lht.get_common_type(rht)))
                     .expect("binary operand type should be known at this point");
 
-                let lhs = Box::new(lhs.cast_to_type(common.clone()));
+                let lhs_cast = Box::new(lhs.clone().cast_to_type(common.clone()));
                 let rhs = Box::new(rhs.cast_to_type(common.clone()));
 
-                let ret = Self::Binary { op, lhs, rhs };
+                let ret = Self::Binary { op, lhs: lhs_cast, rhs };
 
                 Ok(match op {
                     BinaryOp::Add
                     | BinaryOp::Subtract
                     | BinaryOp::Multiply
                     | BinaryOp::Divide
-                    | BinaryOp::Reminder => ret.typed(common),
+                    | BinaryOp::Reminder
+                    | BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor => ret.typed(common),
 
-                    _ => ret.typed(Type::Int),
+                    BinaryOp::LeftShift | BinaryOp::RightShift => ret.typed(lhs.ret.unwrap()),
+
+                    BinaryOp::Equal
+                    | BinaryOp::NotEqual
+                    | BinaryOp::GreaterThan
+                    | BinaryOp::GreaterOrEqual
+                    | BinaryOp::LessThan
+                    | BinaryOp::LessOrEqual => ret.typed(Type::Int),
+
+                    BinaryOp::And | BinaryOp::Or => unreachable!(),
                 })
             }
 
@@ -1387,12 +1400,6 @@ impl Expr {
                 let lhs = Box::new(lhs.type_check(symbols)?);
                 let rhs = Box::new(rhs.type_check(symbols)?);
 
-                // same logic as binary currently with slight changes
-                // most likely wrong . todo
-                // shut up rustc for now
-                // according to Claude, the caluclation is done with `long`
-                // but type of lhs does not change so it is caast back to int.
-
                 match op {
                     BinaryOp::And | BinaryOp::Or => {
                         return Ok(Self::CompoundAssignment { op, lhs, rhs }.typed(Type::Int));
@@ -1409,19 +1416,38 @@ impl Expr {
                     .and_then(|lht| rhs.clone().ret.map(|rht| lht.get_common_type(rht)))
                     .expect("compound assignment operand type should be known at this point");
 
-                let lhs = Box::new(lhs.cast_to_type(common.clone()));
+                let lhs_cast = Box::new(lhs.clone().cast_to_type(common.clone()));
                 let rhs = Box::new(rhs.cast_to_type(common.clone()));
 
-                let ret = Self::CompoundAssignment { op, lhs, rhs };
+                let ret = if matches!(lhs_cast.expr, Expr::Cast { .. }) {
+                    Self::Assignemnt(
+                        lhs,
+                        Box::new(Expr::Binary { op, lhs: lhs_cast, rhs }.typed(common)),
+                    )
+                } else {
+                    Self::CompoundAssignment { op, lhs: lhs_cast, rhs }
+                };
 
                 Ok(match op {
                     BinaryOp::Add
                     | BinaryOp::Subtract
                     | BinaryOp::Multiply
                     | BinaryOp::Divide
-                    | BinaryOp::Reminder => ret.typed(left_type),
+                    | BinaryOp::Reminder
+                    | BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::LeftShift
+                    | BinaryOp::RightShift => ret.typed(left_type),
 
-                    _ => ret.typed(Type::Int),
+                    BinaryOp::Equal
+                    | BinaryOp::NotEqual
+                    | BinaryOp::GreaterThan
+                    | BinaryOp::GreaterOrEqual
+                    | BinaryOp::LessThan
+                    | BinaryOp::LessOrEqual => ret.typed(Type::Int),
+
+                    BinaryOp::And | BinaryOp::Or => unreachable!(),
                 })
             }
             Self::Const(c) => match c {

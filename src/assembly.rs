@@ -758,7 +758,7 @@ impl ir::Instr {
                             + (stack_args.len() % 2 != 0).then_some(8).unwrap_or_default()),
                         Reg(SP, 8),
                     )))
-                    .chain([Instr::Mov(*dst_ty, Reg(AX, 0).align_width(*dst_ty), dst.to_asm())])
+                    .chain([Instr::Mov(*dst_ty, Reg(AX, dst_ty.width()), dst.to_asm())])
                     .collect()
             }
         }

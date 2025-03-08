@@ -79,8 +79,8 @@ impl Display for Instr {
             Instr::Unary { op, src, dst } => write!(f, "{:<8} <- {op} {src}", dst.0),
             Instr::Binary { op, lhs, rhs, dst } => write!(f, "{:<8} <- {lhs} {op} {rhs}", dst.0),
             Instr::Copy { src, dst } => write!(f, "{:<8} <- copy {src}", dst.0),
-            Instr::Jump { target } =>                write!(f, "jump     {:<10} -> {target}", ""),
-            Instr::JumpIfZero { cond, target } =>    write!(f, "jump_z   {cond:<10} -> {target}"),
+            Instr::Jump { target } => write!(f, "jump     {:<10} -> {target}", ""),
+            Instr::JumpIfZero { cond, target } => write!(f, "jump_z   {cond:<10} -> {target}"),
             Instr::JumpIfNotZero { cond, target } => write!(f, "jump_nz  {cond:<10} -> {target}"),
             Instr::Label(target) => write!(f, "\tLABEL {target}"),
             Instr::FuncCall { name, args, dst } => {
@@ -462,7 +462,15 @@ impl ast::Expr {
                     unreachable!("place expression should be resolved earlier.")
                 };
 
-                let rhs = value.to_ir(instrs, symbols);
+                let rhs = if place.ret == value.ret {
+                    value.to_ir(instrs, symbols)
+                } else {
+                    ast::Expr::Cast { target: place.ret.clone().unwrap(), inner: value.clone() }
+                        .typed(place.ret.clone().unwrap())
+                        .to_ir(instrs, symbols)
+                };
+
+                // let rhs = value.to_ir(instrs, symbols);
 
                 instrs.push(Instr::Copy { src: rhs, dst: Place(dst.clone()) });
 
@@ -701,7 +709,18 @@ impl ast::Decl {
 impl ast::VarDecl {
     fn to_ir(&self, instrs: &mut Vec<Instr>, symbols: &mut Namespace<TypeCtx>) {
         if let Some(e) = &self.init {
-            let v = e.to_ir(instrs, symbols);
+            let Some(TypeCtx { type_: dst_type, .. }) = symbols.get(&self.name) else {
+                unreachable!()
+            };
+            let v = if *dst_type == e.ret.clone().unwrap() {
+                e.to_ir(instrs, symbols)
+            } else {
+                ast::Expr::Cast { target: dst_type.clone(), inner: Box::new(e.clone()) }
+                    .typed(dst_type.clone())
+                    .to_ir(instrs, symbols)
+            };
+
+            // let v = e.to_ir(instrs, symbols);
             instrs.push(Instr::Copy { src: v, dst: Place(self.name.clone()) });
         }
     }

@@ -25,7 +25,7 @@ pub fn compile(input: &PathBuf, mode: Mode) -> Result<PathBuf, u8> {
     };
 
     let Ok(tokens) = lexer::lex(&code) else {
-        eprintln!("Failed to lex.");
+        eprintln!("failed to lex.");
         return Err(3);
     };
 
@@ -37,7 +37,7 @@ pub fn compile(input: &PathBuf, mode: Mode) -> Result<PathBuf, u8> {
     let prgm = match parser::parse(&tokens) {
         Ok(prgm) => prgm,
         Err(e) => {
-            eprintln!("Failed to parse. {e:#?}");
+            eprintln!("failed to parse. {e:#?}");
             return Err(4);
         }
     };

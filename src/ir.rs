@@ -542,6 +542,7 @@ impl ast::Expr {
                     Type::Int => instrs.push(Instr::Truncate { src, dst: dst.clone() }),
                     Type::Long => instrs.push(Instr::SignExtend { src, dst: dst.clone() }),
                     Type::Func { .. } => unreachable!(),
+                    _ => todo!(),
                 }
 
                 Value::Var(dst)
@@ -582,6 +583,8 @@ fn postfix_prefix_instrs(
     let one = match expr.ret.as_ref().expect("operand type info must be known") {
         Type::Int => Const::Int(1),
         Type::Long => Const::Long(1),
+        Type::UInt => Const::UInt(1),
+        Type::ULong => Const::ULong(1),
         Type::Func { .. } => unreachable!(),
     };
 

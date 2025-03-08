@@ -91,6 +91,8 @@ impl Program {
 pub enum Type {
     Int,
     Long,
+    UInt,
+    ULong,
     Func { params: Vec<Type>, ret: Box<Type> },
 }
 impl Display for Type {
@@ -98,6 +100,8 @@ impl Display for Type {
         match self {
             Type::Int => f.pad("int"),
             Type::Long => f.pad("long"),
+            Type::UInt => f.pad("uint"),
+            Type::ULong => f.pad("ulong"),
             Type::Func { params, ret } => {
                 let mut buf = Ecow::new();
                 write!(buf, "func (")?;
@@ -123,6 +127,7 @@ impl Type {
             Type::Int => StaticInit::Int(0),
             Type::Long => StaticInit::Long(0),
             Type::Func { .. } => unreachable!("function static value not a thing"),
+            _ => todo!(),
         }
     }
 }
@@ -1643,6 +1648,8 @@ impl Expr {
             Self::Const(c) => match c {
                 Const::Int(_) => Ok(self.typed(Type::Int)),
                 Const::Long(_) => Ok(self.typed(Type::Long)),
+                Const::UInt(_) => Ok(self.typed(Type::UInt)),
+                Const::ULong(_) => Ok(self.typed(Type::ULong)),
             },
             Self::Conditional { cond, then, else_ } => {
                 let cond = Box::new(cond.type_check(symbols)?);
@@ -1673,6 +1680,8 @@ impl Expr {
 pub enum Const {
     Int(i32),
     Long(i64),
+    UInt(u32),
+    ULong(u64),
 }
 
 impl Display for Const {
@@ -1681,6 +1690,10 @@ impl Display for Const {
         match self {
             Const::Int(i) => write!(f, "{i}"),
             Const::Long(i) => write!(f, "{i}"),
+
+            // maybe?
+            Const::UInt(i) => write!(f, "{i}"),
+            Const::ULong(i) => write!(f, "{i}"),
         }
     }
 }
@@ -1695,6 +1708,8 @@ impl Const {
             (Const::Int(i), Type::Long) => StaticInit::Long(i64::from(i)),
             (Const::Long(i), Type::Int) => StaticInit::Int(i as i32),
             (Const::Long(i), Type::Long) => StaticInit::Long(i),
+
+            _ => todo!(),
         }
     }
     fn cast_const(self, target_type: &Type) -> Self {
@@ -1705,6 +1720,8 @@ impl Const {
             (Const::Int(i), Type::Long) => Self::Long(i64::from(i)),
             (Const::Long(i), Type::Int) => Self::Int(i as i32),
             (Const::Long(i), Type::Long) => Self::Long(i),
+
+            _ => todo!(),
         }
     }
 }

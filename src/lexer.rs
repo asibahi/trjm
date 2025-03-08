@@ -9,7 +9,7 @@ use nom::{
     branch::alt,
     bytes::{tag, tag_no_case, take_while},
     character::{
-        complete::{bin_digit1, hex_digit1, u64, oct_digit0},
+        complete::{bin_digit1, hex_digit1, oct_digit0, u64},
         multispace0, satisfy,
     },
     combinator::{all_consuming, cut, not, recognize, success},
@@ -18,14 +18,14 @@ use nom::{
 };
 use std::iter::{Cloned, Enumerate};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum Token {
     // Stuff
     Ident(Ecow),
-    IntLiteral(i32),
-    LongLiteral(i64),
-    UnsignedIntLiteral(u32),
-    UnsignedLongLiteral(u64),
+    IntLit(i32),
+    LongLit(i64),
+    UIntLit(u32),
+    ULongLit(u64),
 
     // types
     Int,
@@ -304,12 +304,12 @@ token!(
         not(satisfy(|c| c == '_' || c.is_alphanum())),
     ))
     .map(|(lit, ty)| match ty {
-        IntType::Unsigned => Token::UnsignedIntLiteral(lit as u32),
-        IntType::UnsignedLong => Token::UnsignedLongLiteral(lit),
-        IntType::Long => Token::LongLiteral(lit as i64),
+        IntType::Unsigned => Token::UIntLit(lit as u32),
+        IntType::UnsignedLong => Token::ULongLit(lit),
+        IntType::Long => Token::LongLit(lit as i64),
         IntType::Unknown => match i32::try_from(lit) {
-            Ok(i) => Token::IntLiteral(i),
-            Err(_) => Token::LongLiteral(lit as i64),
+            Ok(i) => Token::IntLit(i),
+            Err(_) => Token::LongLit(lit as i64),
         },
     })
 );
@@ -358,8 +358,8 @@ mod tests {
     #[test_case("0b10_" => panics "illegal literal")]
     fn number_test(i: &str) -> i64 {
         match number(i).expect("illegal literal").1 {
-            Token::IntLiteral(i) => i64::from(i),
-            Token::LongLiteral(i) => i,
+            Token::IntLit(i) => i64::from(i),
+            Token::LongLit(i) => i,
             _ => unreachable!(),
         }
     }

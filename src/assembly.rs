@@ -22,11 +22,15 @@ impl From<TypeCtx> for BSymbol {
             (Type::Func { .. }, Func { defined, .. }) => BSymbol::Func { _defined: defined },
             (_, Func { .. }) | (Type::Func { .. }, _) => unreachable!(),
 
-            (Type::Int, Static { .. }) => BSymbol::Obj { type_: Longword, is_static: true },
-            (Type::Int, Local) => BSymbol::Obj { type_: Longword, is_static: false },
+            (Type::Int | Type::UInt, Static { .. }) => {
+                BSymbol::Obj { type_: Longword, is_static: true }
+            }
+            (Type::Int | Type::UInt, Local) => BSymbol::Obj { type_: Longword, is_static: false },
 
-            (Type::Long, Static { .. }) => BSymbol::Obj { type_: Quadword, is_static: true },
-            (Type::Long, Local) => BSymbol::Obj { type_: Quadword, is_static: false },
+            (Type::Long | Type::ULong, Static { .. }) => {
+                BSymbol::Obj { type_: Quadword, is_static: true }
+            }
+            (Type::Long | Type::ULong, Local) => BSymbol::Obj { type_: Quadword, is_static: false },
         }
     }
 }
@@ -602,8 +606,8 @@ impl ir::TopLevel {
                 global: *global,
                 init: *init,
                 alignment: match type_ {
-                    Type::Int => 4,
-                    Type::Long => 8,
+                    Type::Int | Type::UInt => 4,
+                    Type::Long | Type::ULong => 8,
                     Type::Func { .. } => unreachable!(),
                 },
             },
@@ -770,6 +774,8 @@ impl ir::Value {
             Self::Const(ast::Const::Int(i)) => Operand::Imm(i64::from(*i)),
             Self::Const(ast::Const::Long(i)) => Operand::Imm(*i),
             Self::Var(place) => place.to_asm(),
+
+            Self::Const(ast::Const::UInt(_) | ast::Const::ULong(_)) => todo!(),
         }
     }
     fn to_asm_type(&self, symbols: &Namespace<BSymbol>) -> AsmType {
@@ -786,8 +792,8 @@ impl ir::Value {
 impl ast::Const {
     fn to_asm_type(self) -> AsmType {
         match self {
-            ast::Const::Int(_) => Longword,
-            ast::Const::Long(_) => Quadword,
+            ast::Const::Int(_) | ast::Const::UInt(_) => Longword,
+            ast::Const::Long(_) | ast::Const::ULong(_) => Quadword,
         }
     }
 }

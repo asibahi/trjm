@@ -1,3 +1,5 @@
+use std::clone::Clone;
+
 use crate::{
     ast::*,
     lexer::{Token, Tokens},
@@ -5,28 +7,29 @@ use crate::{
 use ecow::EcoString as Ecow;
 use either::Either::{self, Left, Right};
 use nom::{
-    Finish, IResult, Parser,
+    Finish, Parser,
     branch::alt,
     bytes::take,
-    combinator::{all_consuming, complete, iterator, not, opt, verify},
+    combinator::{all_consuming, opt, verify},
     error,
-    multi::{many, separated_list0, separated_list1},
+    multi::{fold, many, separated_list0, separated_list1},
     sequence::{delimited, preceded, separated_pair, terminated},
 };
 use nom_language::precedence::{Assoc, Binary, Operation, Unary, binary_op, precedence, unary_op};
 
-type ParseError<'s> = ();
-// type ParseError<'s> = (Tokens<'s>, nom::error::ErrorKind);
+// type ParseError<'s> = ();
+type ParseError<'s> = (Tokens<'s>, nom::error::ErrorKind);
+type ParseResult<'s, T> = nom::IResult<Tokens<'s>, T, ParseError<'s>>;
 
 pub fn parse(tokens: &[Token]) -> Result<Program, ParseError<'_>> {
     all_consuming(parse_program).parse_complete(Tokens(tokens)).finish().map(|t| t.1)
 }
 
-fn parse_program(i: Tokens<'_>) -> IResult<Tokens<'_>, Program, ParseError<'_>> {
+fn parse_program(i: Tokens<'_>) -> ParseResult<'_, Program> {
     many(1.., parse_decl).map(Program::new).parse_complete(i)
 }
 
-fn parse_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, Decl, ParseError<'_>> {
+fn parse_decl(i: Tokens<'_>) -> ParseResult<'_, Decl> {
     parse_var_decl.map(Decl::Var).or(parse_func_decl.map(Decl::Func)).parse_complete(i)
 }
 
@@ -46,50 +49,73 @@ macro_rules! tag_token {
     };
 }
 
-fn parse_type(i: Tokens<'_>) -> IResult<Tokens<'_>, Type, ParseError<'_>> {
-    // this is clearly wrong for more types.
-    terminated(
-        alt((
-            tag_token!(Token::Int, Token::Long => Type::Long),
-            tag_token!(Token::Long, Token::Int => Type::Long),
-            tag_token!(Token::Long => Type::Long),
-            tag_token!(Token::Int => Type::Int),
-        )),
-        not(tag_token!(Token::Int)),
+#[allow(clippy::unit_arg)]
+fn parse_type(i: Tokens<'_>) -> ParseResult<'_, Type> {
+    // i really hate this function.
+
+    many(
+        1..,
+        tag_token!(Token::Int | Token::Long | Token::Signed | Token::Unsigned)
+            .map(|t: Tokens<'_>| t.0[0].clone()),
     )
+    .map_opt(|list: Vec<_>| {
+        let set = FxHashSet::from_iter(&list);
+
+        if set.is_empty()
+            || set.len() < list.len()
+            || (set.contains(&Token::Signed) && set.contains(&Token::Unsigned))
+        {
+            return None;
+        }
+
+        let u = set.contains(&Token::Unsigned);
+        let l = set.contains(&Token::Long);
+
+        Some(match (u, l) {
+            (true, true) => Type::ULong,
+            (true, false) => Type::UInt,
+            (false, true) => Type::Long,
+            (false, false) => Type::Int,
+        })
+    })
     .parse_complete(i)
 }
 
-fn parse_specifiers(i: Tokens<'_>) -> IResult<Tokens<'_>, (Type, StorageClass), ParseError<'_>> {
-    let mut iter = iterator(
-        i,
-        // nom issue #1835
-        complete(alt((
+fn parse_specifiers(i: Tokens<'_>) -> ParseResult<'_, (Type, StorageClass)> {
+    let (i, (sc, ty)) = fold(
+        1..,
+        alt((
             tag_token!(Token::Static => StorageClass::Static).map(Left),
             tag_token!(Token::Extern => StorageClass::Extern).map(Left),
             tag_token!(Token::Long => Token::Long).map(Right),
             tag_token!(Token::Int => Token::Int).map(Right),
-        ))),
-    );
+            tag_token!(Token::Signed => Token::Signed).map(Right),
+            tag_token!(Token::Unsigned => Token::Unsigned).map(Right),
+        )),
+        || (Vec::new(), Vec::new()),
+        |(mut sc, mut types), item| {
+            match item {
+                Left(s) => sc.push(s),
+                Right(t) => types.push(t),
+            }
 
-    let (sc, ty) = iter.by_ref().partition::<Vec<_>, _>(Either::is_left);
-
-    let (i, ()) = iter.finish()?;
+            (sc, types)
+        },
+    )
+    .parse_complete(i)?;
 
     if sc.len() > 1 {
         #[allow(clippy::unit_arg)]
         return Err(nom::Err::Error(error::make_error(i, error::ErrorKind::TooLarge)));
     }
 
-    let sc = sc.first().map_or(StorageClass::None, |e| e.clone().unwrap_left());
-
-    let ty = ty.iter().map(|e| e.clone().unwrap_right()).collect::<Vec<_>>();
-    let (_, ty) = parse_type(Tokens::from(&ty[..]))?;
+    let sc = sc.first().map_or(StorageClass::None, |i| *i);
+    let (_, ty) = parse_type(Tokens::from(&ty[..])).map_err(|e| e.map_input(|_| i))?;
 
     Ok((i, (ty, sc)))
 }
 
-fn parse_var_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, VarDecl, ParseError<'_>> {
+fn parse_var_decl(i: Tokens<'_>) -> ParseResult<'_, VarDecl> {
     let (i, (ty, sc)) = parse_specifiers.parse_complete(i)?;
 
     terminated(
@@ -100,7 +126,7 @@ fn parse_var_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, VarDecl, ParseError<'_>>
     .parse_complete(i)
 }
 
-fn parse_func_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, FuncDecl, ParseError<'_>> {
+fn parse_func_decl(i: Tokens<'_>) -> ParseResult<'_, FuncDecl> {
     let (i, (ret, sc)) = parse_specifiers.parse_complete(i)?;
 
     let (i, name) = parse_ident.parse_complete(i)?;
@@ -127,7 +153,7 @@ fn parse_func_decl(i: Tokens<'_>) -> IResult<Tokens<'_>, FuncDecl, ParseError<'_
     Ok((i, func_def))
 }
 
-fn parse_block(i: Tokens<'_>) -> IResult<Tokens<'_>, Block, ParseError<'_>> {
+fn parse_block(i: Tokens<'_>) -> ParseResult<'_, Block> {
     delimited(
         tag_token!(Token::BraceOpen),
         many(.., parse_decl.map(BlockItem::D).or(parse_stmt.map(BlockItem::S))),
@@ -137,11 +163,11 @@ fn parse_block(i: Tokens<'_>) -> IResult<Tokens<'_>, Block, ParseError<'_>> {
     .parse_complete(i)
 }
 
-fn parse_ident(i: Tokens<'_>) -> IResult<Tokens<'_>, Ecow, ParseError<'_>> {
+fn parse_ident(i: Tokens<'_>) -> ParseResult<'_, Ecow> {
     tag_token!(Token::Ident(_)).map_opt(|t: Tokens<'_>| t.0[0].unwrap_ident()).parse_complete(i)
 }
 
-fn parse_stmt(i: Tokens<'_>) -> IResult<Tokens<'_>, Stmt, ParseError<'_>> {
+fn parse_stmt(i: Tokens<'_>) -> ParseResult<'_, Stmt> {
     let ret = delimited(tag_token!(Token::Return), parse_expr, tag_token!(Token::Semicolon))
         .map(Stmt::Return);
     let expr = terminated(parse_expr, tag_token!(Token::Semicolon)).map(Stmt::Expression);
@@ -233,6 +259,7 @@ enum BinKind {
     CompoundAssignment(BinaryOp),
 }
 use BinKind::*;
+use rustc_hash::FxHashSet;
 
 macro_rules! binop {
     ($prec:literal, $token:ident, $binop:ident) => {
@@ -251,9 +278,7 @@ macro_rules! binop {
     };
 }
 
-fn parse_prefixes(
-    i: Tokens<'_>,
-) -> IResult<Tokens<'_>, Unary<Either<UnaryOp, Type>, i32>, ParseError<'_>> {
+fn parse_prefixes(i: Tokens<'_>) -> ParseResult<'_, Unary<Either<UnaryOp, Type>, i32>> {
     alt((
         unary_op(2, tag_token!(Token::Hyphen => Left(UnaryOp::Negate))),
         unary_op(2, tag_token!(Token::Tilde => Left(UnaryOp::Complement))),
@@ -272,7 +297,7 @@ fn parse_prefixes(
     .parse_complete(i)
 }
 
-fn parse_postfixes(i: Tokens<'_>) -> IResult<Tokens<'_>, Unary<UnaryOp, i32>, ParseError<'_>> {
+fn parse_postfixes(i: Tokens<'_>) -> ParseResult<'_, Unary<UnaryOp, i32>> {
     // chapter 5 extra credit
 
     alt((
@@ -282,7 +307,7 @@ fn parse_postfixes(i: Tokens<'_>) -> IResult<Tokens<'_>, Unary<UnaryOp, i32>, Pa
     .parse_complete(i)
 }
 
-fn parse_infixes(i: Tokens<'_>) -> IResult<Tokens<'_>, Binary<BinKind, i32>, ParseError<'_>> {
+fn parse_infixes(i: Tokens<'_>) -> ParseResult<'_, Binary<BinKind, i32>> {
     alt((
         alt((
             binop!(4, Plus, Add),
@@ -336,7 +361,7 @@ fn parse_infixes(i: Tokens<'_>) -> IResult<Tokens<'_>, Binary<BinKind, i32>, Par
     .parse_complete(i)
 }
 
-fn parse_operands(i: Tokens<'_>) -> IResult<Tokens<'_>, TypedExpr, ParseError<'_>> {
+fn parse_operands(i: Tokens<'_>) -> ParseResult<'_, TypedExpr> {
     alt((
         // function call
         parse_ident
@@ -347,13 +372,14 @@ fn parse_operands(i: Tokens<'_>) -> IResult<Tokens<'_>, TypedExpr, ParseError<'_
             ))
             .map(|(name, args)| Expr::FuncCall { name, args }.dummy_typed()),
         // const
-        tag_token!(Token::IntLiteral(_) | Token::LongLiteral(_)).map_opt(|t: Tokens<'_>| {
-            match t.0[0] {
-                Token::IntLiteral(i) => Some(Expr::Const(Const::Int(i)).typed(Type::Int)),
-                Token::LongLiteral(i) => Some(Expr::Const(Const::Long(i)).typed(Type::Long)),
+        tag_token!(Token::IntLit(_) | Token::LongLit(_) | Token::UIntLit(_) | Token::ULongLit(_))
+            .map_opt(|t: Tokens<'_>| match t.0[0] {
+                Token::IntLit(i) => Some(Expr::Const(Const::Int(i)).typed(Type::Int)),
+                Token::LongLit(i) => Some(Expr::Const(Const::Long(i)).typed(Type::Long)),
+                Token::UIntLit(i) => Some(Expr::Const(Const::UInt(i)).typed(Type::UInt)),
+                Token::ULongLit(i) => Some(Expr::Const(Const::ULong(i)).typed(Type::ULong)),
                 _ => None,
-            }
-        }),
+            }),
         // group
         delimited(tag_token!(Token::ParenOpen), parse_expr, tag_token!(Token::ParenClose)),
         // variable
@@ -362,7 +388,7 @@ fn parse_operands(i: Tokens<'_>) -> IResult<Tokens<'_>, TypedExpr, ParseError<'_
     .parse_complete(i)
 }
 
-fn parse_expr(i: Tokens<'_>) -> IResult<Tokens<'_>, TypedExpr, ParseError<'_>> {
+fn parse_expr(i: Tokens<'_>) -> ParseResult<'_, TypedExpr> {
     // precedence reference:
     // https://en.cppreference.com/w/c/language/operator_precedence
 

@@ -1,8 +1,8 @@
 use pico_args::Arguments;
-use std::{fs::remove_file, path::PathBuf, process::ExitCode};
+use std::{ffi::OsString, fs::remove_file, path::PathBuf, process::ExitCode};
 
 fn main() -> ExitCode {
-    let (mode, input) = match parse() {
+    let (mode, input, rem_args) = match parse() {
         Ok(mi) => mi,
         Err(e) => return e,
     };
@@ -22,8 +22,8 @@ fn main() -> ExitCode {
     _ = remove_file(preprocessed);
 
     let res = match mode {
-        trjm::Mode::ObjectFile => assemble(&compiled, true),
-        trjm::Mode::Executable => assemble(&compiled, false),
+        trjm::Mode::ObjectFile => assemble(&compiled, true, rem_args),
+        trjm::Mode::Executable => assemble(&compiled, false, rem_args),
         _ => return ExitCode::SUCCESS,
     };
     _ = remove_file(&compiled);
@@ -34,7 +34,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn parse() -> Result<(trjm::Mode, PathBuf), ExitCode> {
+fn parse() -> Result<(trjm::Mode, PathBuf, Vec<OsString>), ExitCode> {
     let mut args = Arguments::from_env();
 
     let mode = match () {
@@ -49,20 +49,16 @@ fn parse() -> Result<(trjm::Mode, PathBuf), ExitCode> {
         _ => trjm::Mode::Executable,
     };
 
-    let res = match args.free_from_fn(validate_path) {
-        Ok(i) => (mode, i),
+    let path = match args.free_from_fn(validate_path) {
+        Ok(i) => i,
         Err(e) => {
             eprintln!("Input file required. {e}");
             return Err(ExitCode::from(43));
         }
     };
     let rem = args.finish();
-    if !rem.is_empty() {
-        eprintln!("Unknwon additional arguments: {rem:?}");
-        return Err(ExitCode::from(99));
-    }
 
-    Ok(res)
+    Ok((mode, path, rem))
 }
 
 fn validate_path(s: &str) -> Result<PathBuf, &'static str> {
@@ -92,11 +88,17 @@ fn preprocess(input: &PathBuf) -> Result<PathBuf, ExitCode> {
     }
 }
 
-fn assemble(input: &PathBuf, object_file: bool) -> Result<PathBuf, ExitCode> {
+fn assemble(
+    input: &PathBuf,
+    object_file: bool,
+    extra_args: Vec<OsString>,
+) -> Result<PathBuf, ExitCode> {
     let (ext, obj) = if object_file { ("o", "-c") } else { ("", "") };
+    let extra_args = extra_args.join(std::ffi::OsStr::new(" "));
 
     let output = input.with_extension(ext);
-    let cmd = duct::cmd!("gcc", obj, input, "-o", &output).unchecked().stderr_capture().run();
+    let cmd =
+        duct::cmd!("gcc", obj, input, "-o", &output, extra_args).unchecked().stderr_capture().run();
 
     match cmd {
         Ok(o) if !o.status.success() => {

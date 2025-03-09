@@ -2,6 +2,7 @@ use crate::ast::{self, Const, Namespace, StaticInit, StorageClass, Type, TypeCtx
 use ecow::{EcoString as Ecow, eco_format};
 use either::Either::{Left, Right};
 use std::{
+    cmp::Ordering,
     fmt::Display,
     sync::atomic::{AtomicUsize, Ordering::Relaxed},
 };
@@ -36,10 +37,10 @@ pub enum TopLevel {
 impl Display for TopLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TopLevel::StaticVar { name, global, type_, init } => {
+            Self::StaticVar { name, global, type_, init } => {
                 writeln!(f, "Static: {name}. global:{global}. type: {type_}. initial value: {init}")
             }
-            TopLevel::Function { name, global, params, body } => {
+            Self::Function { name, global, params, body } => {
                 write!(f, "Function: {name}. global:{global}. (")?;
                 for param in params {
                     write!(f, "{param}, ")?;
@@ -59,8 +60,10 @@ impl Display for TopLevel {
 #[derive(Debug, Clone)]
 pub enum Instr {
     Return(Value),
-    SignExtend { src: Value, dst: Place },
     Truncate { src: Value, dst: Place },
+    SignExtend { src: Value, dst: Place },
+    ZeroExtend { src: Value, dst: Place },
+
     Unary { op: UnOp, src: Value, dst: Place },
     Binary { op: BinOp, lhs: Value, rhs: Value, dst: Place },
     Copy { src: Value, dst: Place },
@@ -73,17 +76,18 @@ pub enum Instr {
 impl Display for Instr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Instr::Return(value) => write!(f, "return {value}"),
-            Instr::SignExtend { src, dst } => write!(f, "{:<8} <- sign_extend {src}", dst.0),
-            Instr::Truncate { src, dst } => write!(f, "{:<8} <- truncate {src}", dst.0),
-            Instr::Unary { op, src, dst } => write!(f, "{:<8} <- {op} {src}", dst.0),
-            Instr::Binary { op, lhs, rhs, dst } => write!(f, "{:<8} <- {lhs} {op} {rhs}", dst.0),
-            Instr::Copy { src, dst } => write!(f, "{:<8} <- copy {src}", dst.0),
-            Instr::Jump { target } => write!(f, "jump     {:<10} -> {target}", ""),
-            Instr::JumpIfZero { cond, target } => write!(f, "jump_z   {cond:<10} -> {target}"),
-            Instr::JumpIfNotZero { cond, target } => write!(f, "jump_nz  {cond:<10} -> {target}"),
-            Instr::Label(target) => write!(f, "\tLABEL {target}"),
-            Instr::FuncCall { name, args, dst } => {
+            Self::Return(value) => write!(f, "return {value}"),
+            Self::Truncate { src, dst } => write!(f, "{:<8} <- truncate {src}", dst.0),
+            Self::SignExtend { src, dst } => write!(f, "{:<8} <- sign_extend {src}", dst.0),
+            Self::ZeroExtend { src, dst } => write!(f, "{:<8} <- zero_extend {src}", dst.0),
+            Self::Unary { op, src, dst } => write!(f, "{:<8} <- {op} {src}", dst.0),
+            Self::Binary { op, lhs, rhs, dst } => write!(f, "{:<8} <- {lhs} {op} {rhs}", dst.0),
+            Self::Copy { src, dst } => write!(f, "{:<8} <- copy {src}", dst.0),
+            Self::Jump { target } => write!(f, "jump     {:<10} -> {target}", ""),
+            Self::JumpIfZero { cond, target } => write!(f, "jump_z   {cond:<10} -> {target}"),
+            Self::JumpIfNotZero { cond, target } => write!(f, "jump_nz  {cond:<10} -> {target}"),
+            Self::Label(target) => write!(f, "\tLABEL {target}"),
+            Self::FuncCall { name, args, dst } => {
                 write!(f, "{:<8} <- call {name} (", dst.0)?;
                 for arg in args {
                     write!(f, "{arg}, ")?;
@@ -102,8 +106,8 @@ pub enum Value {
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Value::Const(cnst) => write!(f, "({cnst})"),
-            Value::Var(place) => write!(f, "[{}]", place.0),
+            Self::Const(cnst) => write!(f, "({cnst})"),
+            Self::Var(place) => write!(f, "[{}]", place.0),
         }
     }
 }
@@ -120,9 +124,9 @@ pub enum UnOp {
 impl Display for UnOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UnOp::Complement => write!(f, "~"),
-            UnOp::Negate => write!(f, "-"),
-            UnOp::Not => write!(f, "!"),
+            Self::Complement => f.pad("~"),
+            Self::Negate => f.pad("-"),
+            Self::Not => f.pad("!"),
         }
     }
 }
@@ -152,22 +156,22 @@ pub enum BinOp {
 impl Display for BinOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BinOp::Add => write!(f, "+"),
-            BinOp::Subtract => write!(f, "-"),
-            BinOp::Multiply => write!(f, "*"),
-            BinOp::Divide => write!(f, "/"),
-            BinOp::Reminder => write!(f, "%"),
-            BinOp::BitAnd => write!(f, "&"),
-            BinOp::BitOr => write!(f, "|"),
-            BinOp::BitXor => write!(f, "^"),
-            BinOp::LeftShift => write!(f, "<<"),
-            BinOp::RightShift => write!(f, ">>"),
-            BinOp::Equal => write!(f, "=="),
-            BinOp::NotEqual => write!(f, "!="),
-            BinOp::LessThan => write!(f, "<"),
-            BinOp::LessOrEqual => write!(f, "<="),
-            BinOp::GreaterThan => write!(f, ">"),
-            BinOp::GreaterOrEqual => write!(f, ">="),
+            Self::Add => f.pad("+"),
+            Self::Subtract => f.pad("-"),
+            Self::Multiply => f.pad("*"),
+            Self::Divide => f.pad("/"),
+            Self::Reminder => f.pad("%"),
+            Self::BitAnd => f.pad("&"),
+            Self::BitOr => f.pad("|"),
+            Self::BitXor => f.pad("^"),
+            Self::LeftShift => f.pad("<<"),
+            Self::RightShift => f.pad(">>"),
+            Self::Equal => f.pad("=="),
+            Self::NotEqual => f.pad("!="),
+            Self::LessThan => f.pad("<"),
+            Self::LessOrEqual => f.pad("<="),
+            Self::GreaterThan => f.pad(">"),
+            Self::GreaterOrEqual => f.pad(">="),
         }
     }
 }
@@ -532,20 +536,22 @@ impl ast::Expr {
 
             Self::Cast { target, inner } => {
                 let src = inner.to_ir(instrs, symbols);
-                if Some(target) == inner.ret.as_ref() {
+                let src_ty = inner.ret.as_ref().expect("inner expr type should be known");
+                if target == src_ty {
                     return src;
                 }
 
-                let dst = make_ir_variable("cst", expr_type.clone(), symbols);
+                let dst_var = make_ir_variable("cst", expr_type.clone(), symbols);
+                let dst = dst_var.clone();
 
-                match target {
-                    Type::Int => instrs.push(Instr::Truncate { src, dst: dst.clone() }),
-                    Type::Long => instrs.push(Instr::SignExtend { src, dst: dst.clone() }),
-                    Type::Func { .. } => unreachable!(),
-                    _ => todo!(),
+                match target.size().cmp(&src_ty.size()) {
+                    Ordering::Equal => instrs.push(Instr::Copy { src, dst }),
+                    Ordering::Less => instrs.push(Instr::Truncate { src, dst }),
+                    _ if src_ty.signed() => instrs.push(Instr::SignExtend { src, dst }),
+                    _ => instrs.push(Instr::ZeroExtend { src, dst }),
                 }
 
-                Value::Var(dst)
+                Value::Var(dst_var)
             }
         }
     }

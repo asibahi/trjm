@@ -629,6 +629,7 @@ impl ir::Instr {
 
             Self::SignExtend { src, dst } => vec![Instr::Movsx(src.to_asm(), dst.to_asm())],
             Self::Truncate { src, dst } => vec![Instr::Mov(Longword, src.to_asm(), dst.to_asm())],
+            Self::ZeroExtend { .. } => todo!(),
 
             Self::Unary { op: ir::UnOp::Not, src, dst } => {
                 let src_ty = src.to_asm_type(symbols);

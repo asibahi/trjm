@@ -117,7 +117,7 @@ impl Display for Type {
 }
 
 impl Type {
-    fn size(&self) -> usize {
+    pub fn size(&self) -> usize {
         match self {
             Type::Int | Type::UInt => 4,
             Type::Long | Type::ULong => 8,
@@ -126,7 +126,7 @@ impl Type {
             ),
         }
     }
-    fn signed(&self) -> bool {
+ pub   fn signed(&self) -> bool {
         match self {
             Type::Int | Type::Long => true,
             Type::UInt | Type::ULong => false,

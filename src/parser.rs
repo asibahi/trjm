@@ -49,7 +49,6 @@ macro_rules! tag_token {
     };
 }
 
-#[allow(clippy::unit_arg)]
 fn parse_type(i: Tokens<'_>) -> ParseResult<'_, Type> {
     // i really hate this function.
 
@@ -105,7 +104,6 @@ fn parse_specifiers(i: Tokens<'_>) -> ParseResult<'_, (Type, StorageClass)> {
     .parse_complete(i)?;
 
     if sc.len() > 1 {
-        #[allow(clippy::unit_arg)]
         return Err(nom::Err::Error(error::make_error(i, error::ErrorKind::TooLarge)));
     }
 

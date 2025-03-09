@@ -13,16 +13,5 @@ nom-language = "0.1.0"
 pico-args = "0.5.0"
 rustc-hash = "2.1.1"
 
-[lints.clippy]
-pedantic.level = "warn"
-pedantic.priority = -1
-missing_errors_doc = "allow"
-wildcard_imports = "allow"
-ignored_unit_patterns = "allow"
-similar_names = "allow"
-enum_glob_use = "allow"
-should_panic_without_expect = "allow"
-needless_pass_by_value ="allow"
-
 [dev-dependencies]
 test-case = "3"

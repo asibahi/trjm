@@ -242,7 +242,6 @@ impl ast::FuncDecl {
     }
 }
 impl ast::Stmt {
-    #[expect(clippy::too_many_lines)]
     fn to_ir(&self, instrs: &mut Vec<Instr>, symbols: &mut Namespace<TypeCtx>) {
         let goto_label = |s| eco_format!("goto.{s}");
 
@@ -412,7 +411,6 @@ impl ast::TypedExpr {
 }
 
 impl ast::Expr {
-    #[allow(clippy::too_many_lines)]
     fn to_ir(
         &self,
         instrs: &mut Vec<Instr>,

@@ -1,6 +1,3 @@
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
-
 use crate::{
     ast::{self, Attributes::*, Namespace, StaticInit, Type, TypeCtx},
     ir,
@@ -140,7 +137,6 @@ impl TopLevel {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
     fn adjust_instrs(&mut self) {
         '_stack_frame: {
             match self {
@@ -616,7 +612,6 @@ impl ir::TopLevel {
 }
 
 impl ir::Instr {
-    #[allow(clippy::too_many_lines)]
     fn to_asm(&self, symbols: &Namespace<BSymbol>) -> Vec<Instr> {
         match self {
             Self::Return(value) => {

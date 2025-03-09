@@ -1,7 +1,4 @@
 #![warn(dead_code)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
 
 use ecow::EcoString as Ecow;
 use nom::{

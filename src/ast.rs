@@ -126,7 +126,7 @@ impl Type {
             ),
         }
     }
- pub   fn signed(&self) -> bool {
+    pub fn signed(&self) -> bool {
         match self {
             Type::Int | Type::Long => true,
             Type::UInt | Type::ULong => false,
@@ -736,7 +736,6 @@ impl Block {
 
     fn resolve_loop_labels(self, current_label: LoopKind) -> anyhow::Result<Self> {
         let mut acc = Vec::with_capacity(self.0.len());
-        let current_label = current_label; // pedantic clippy
 
         for bi in self.0 {
             let bi = bi.resolve_loop_labels(current_label.clone())?;
@@ -1521,7 +1520,6 @@ impl Expr {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
     fn type_check(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<TypedExpr> {
         match self {
             Self::FuncCall { name, args } => {
@@ -1733,10 +1731,7 @@ impl Display for Const {
 
 macro_rules! const_cast {
     ($self:ident, $target_type:ident, [$($types:tt),+ $(,)?]) => {
-        #[allow(clippy::cast_possible_truncation)]
-        #[allow(clippy::cast_possible_wrap)]
-        #[allow(clippy::cast_sign_loss)]
-        #[allow(clippy::cast_lossless)]
+
         match ($self, $target_type) {
             (_, Type::Func { .. }) => unreachable!(),
             $(

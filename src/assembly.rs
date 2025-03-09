@@ -8,7 +8,7 @@ use std::io::Write;
 
 #[derive(Debug, Clone, Copy)]
 enum BSymbol {
-    Obj { type_: AsmType, is_static: bool },
+    Obj { type_: AsmType, signed: bool, is_static: bool },
     Func { _defined: bool },
 }
 impl From<TypeCtx> for BSymbol {
@@ -19,15 +19,27 @@ impl From<TypeCtx> for BSymbol {
             (Type::Func { .. }, Func { defined, .. }) => BSymbol::Func { _defined: defined },
             (_, Func { .. }) | (Type::Func { .. }, _) => unreachable!(),
 
-            (Type::Int | Type::UInt, Static { .. }) => {
-                BSymbol::Obj { type_: Longword, is_static: true }
+            (Type::Int, Static { .. }) => {
+                BSymbol::Obj { type_: Longword, signed: true, is_static: true }
             }
-            (Type::Int | Type::UInt, Local) => BSymbol::Obj { type_: Longword, is_static: false },
+            (Type::UInt, Static { .. }) => {
+                BSymbol::Obj { type_: Longword, signed: false, is_static: true }
+            }
+            (Type::Int, Local) => BSymbol::Obj { type_: Longword, signed: true, is_static: false },
+            (Type::UInt, Local) => {
+                BSymbol::Obj { type_: Longword, signed: false, is_static: false }
+            }
 
-            (Type::Long | Type::ULong, Static { .. }) => {
-                BSymbol::Obj { type_: Quadword, is_static: true }
+            (Type::Long, Static { .. }) => {
+                BSymbol::Obj { type_: Quadword, signed: true, is_static: true }
             }
-            (Type::Long | Type::ULong, Local) => BSymbol::Obj { type_: Quadword, is_static: false },
+            (Type::ULong, Static { .. }) => {
+                BSymbol::Obj { type_: Quadword, signed: false, is_static: true }
+            }
+            (Type::Long, Local) => BSymbol::Obj { type_: Quadword, signed: true, is_static: false },
+            (Type::ULong, Local) => {
+                BSymbol::Obj { type_: Quadword, signed: false, is_static: false }
+            }
         }
     }
 }
@@ -204,6 +216,12 @@ impl TopLevel {
                             Instr::Push(Reg(R10, 8)),
                         ]);
                     }
+                    Instr::Div(ty, v @ Imm(_)) => {
+                        out.extend([
+                            Instr::Mov(ty, v, Reg(R10, ty.width())),
+                            Instr::Div(ty, Reg(R10, ty.width())),
+                        ]);
+                    }
                     Instr::Idiv(ty, v @ Imm(_)) => {
                         out.extend([
                             Instr::Mov(ty, v, Reg(R10, ty.width())),
@@ -266,11 +284,20 @@ impl TopLevel {
                             Instr::Movsx(Reg(R10, 4), dst),
                         ]);
                     }
-                    Instr::Movsx(src, dst @ (Stack(_) | Data(_))) => {
+                    Instr::Movsx(src, dst @ (Stack(_) | Data(_)   )) => {
                         out.extend([
                             Instr::Movsx(src, Reg(R11, 8)),
                             Instr::Mov(Quadword, Reg(R11, 8), dst),
                         ]);
+                    }
+                    Instr::MovZeroExtend(src,dst @ Reg(_,_)) => {
+                        out.push(Instr::Mov(Longword, src, dst));
+                    }
+                    Instr::MovZeroExtend(src,dst @ (Stack(_) | Data(_)) ) => {
+                        out.extend([
+                            Instr::Mov(Longword, src, Reg(R11, 4)),
+                            Instr::Mov(Quadword, Reg(R11, 8), dst),
+                            ]);
                     }
                     other => out.push(other),
                 }
@@ -285,10 +312,12 @@ impl TopLevel {
 pub enum Instr {
     Mov(AsmType, Operand, Operand),
     Movsx(Operand, Operand),
+    MovZeroExtend(Operand, Operand),
     Unary(Operator, AsmType, Operand),
     Binary(Operator, AsmType, Operand, Operand),
     Cmp(AsmType, Operand, Operand),
     Idiv(AsmType, Operand),
+    Div(AsmType, Operand),
     Cdq(AsmType),
     Jmp(Ecow),
     JmpCC(CondCode, Ecow),
@@ -330,6 +359,10 @@ impl Instr {
                 let ty = ty.emit_code();
                 _ = writeln!(f, "\tidiv{ty}    {}", op.emit_code());
             }
+            Self::Div(ty, op) => {
+                let ty = ty.emit_code();
+                _ = writeln!(f, "\tdiv{ty}    {}", op.emit_code());
+            }
 
             Self::Cdq(ty) => match ty {
                 Longword => _ = writeln!(f, "\tcdq"),
@@ -369,6 +402,7 @@ impl Instr {
 
                 _ = writeln!(f, "\tmovslq  {src:<7} {dst}");
             }
+            Self::MovZeroExtend(..) => unimplemented!(),
         }
     }
 
@@ -379,7 +413,10 @@ impl Instr {
         symbols: &Namespace<BSymbol>,
     ) {
         match self {
-            Self::Unary(_, _, opp) | Self::Idiv(_, opp) | Self::SetCC(_, opp) => {
+            Self::Unary(_, _, opp)
+            | Self::Idiv(_, opp)
+            | Self::Div(_, opp)
+            | Self::SetCC(_, opp) => {
                 opp.replace_pseudos(map, stack_depth, symbols);
             }
             Self::Binary(_, _, opp1, opp2)
@@ -390,7 +427,7 @@ impl Instr {
             }
             Self::Push(opp) => opp.replace_pseudos(map, stack_depth, symbols),
 
-            Self::Movsx(op1, op2) => {
+            Self::Movsx(op1, op2) | Self::MovZeroExtend(op1, op2) => {
                 op1.replace_pseudos(map, stack_depth, symbols);
                 op2.replace_pseudos(map, stack_depth, symbols);
             }
@@ -545,6 +582,10 @@ impl Register {
 pub enum CondCode {
     E,
     NE,
+    A,
+    AE,
+    B,
+    BE,
     L,
     LE,
     G,
@@ -556,6 +597,10 @@ impl CondCode {
         match self {
             Self::E => "e",
             Self::NE => "ne",
+            Self::A => "a",
+            Self::AE => "ae",
+            Self::B => "b",
+            Self::BE => "be",
             Self::L => "l",
             Self::LE => "le",
             Self::G => "g",
@@ -615,7 +660,7 @@ impl ir::Instr {
     fn to_asm(&self, symbols: &Namespace<BSymbol>) -> Vec<Instr> {
         match self {
             Self::Return(value) => {
-                let ty = value.to_asm_type(symbols);
+                let (ty, _) = value.to_asm_type(symbols);
                 vec![
                     Instr::Mov(ty, value.to_asm(), Operand::Reg(Register::AX, ty.width())),
                     Instr::Ret,
@@ -624,10 +669,10 @@ impl ir::Instr {
 
             Self::SignExtend { src, dst } => vec![Instr::Movsx(src.to_asm(), dst.to_asm())],
             Self::Truncate { src, dst } => vec![Instr::Mov(Longword, src.to_asm(), dst.to_asm())],
-            Self::ZeroExtend { .. } => todo!(),
+            Self::ZeroExtend { src, dst } => vec![Instr::MovZeroExtend(src.to_asm(), dst.to_asm())],
 
             Self::Unary { op: ir::UnOp::Not, src, dst } => {
-                let src_ty = src.to_asm_type(symbols);
+                let (src_ty, _) = src.to_asm_type(symbols);
                 let Some(BSymbol::Obj { type_: dst_ty, .. }) = symbols.get(&dst.0) else {
                     unreachable!()
                 };
@@ -640,7 +685,7 @@ impl ir::Instr {
                 ]
             }
             Self::Unary { op, src, dst } => {
-                let src_ty = src.to_asm_type(symbols);
+                let (src_ty, _) = src.to_asm_type(symbols);
                 let dst = dst.to_asm();
                 vec![
                     Instr::Mov(src_ty, src.to_asm(), dst.clone()),
@@ -648,7 +693,7 @@ impl ir::Instr {
                 ]
             }
             Self::Binary { op, lhs, rhs, dst } => {
-                let src_ty = lhs.to_asm_type(symbols);
+                let (src_ty, signed) = lhs.to_asm_type(symbols);
                 match op {
                     ir::BinOp::Add
                     | ir::BinOp::Subtract
@@ -661,7 +706,12 @@ impl ir::Instr {
                         let dst = dst.to_asm();
                         vec![
                             Instr::Mov(src_ty, lhs.to_asm(), dst.clone()),
-                            Instr::Binary(op.to_asm().unwrap_left(), src_ty, rhs.to_asm(), dst),
+                            Instr::Binary(
+                                op.to_asm(signed).unwrap_left(),
+                                src_ty,
+                                rhs.to_asm(),
+                                dst,
+                            ),
                         ]
                     }
                     ir::BinOp::Divide | ir::BinOp::Reminder => {
@@ -670,20 +720,26 @@ impl ir::Instr {
                             ir::BinOp::Reminder => Register::DX,
                             _ => unreachable!(),
                         };
-                        vec![
-                            Instr::Mov(
-                                src_ty,
-                                lhs.to_asm(),
-                                Operand::Reg(Register::AX, 4).align_width(src_ty),
-                            ),
-                            Instr::Cdq(src_ty),
-                            Instr::Idiv(src_ty, rhs.to_asm()),
-                            Instr::Mov(
-                                src_ty,
-                                Operand::Reg(res, 4).align_width(src_ty),
-                                dst.to_asm(),
-                            ),
-                        ]
+                        let mut instrs = vec![Instr::Mov(
+                            src_ty,
+                            lhs.to_asm(),
+                            Operand::Reg(Register::AX, src_ty.width()),
+                        )];
+                        if signed {
+                            instrs.extend([Instr::Cdq(src_ty), Instr::Idiv(src_ty, rhs.to_asm())]);
+                        } else {
+                            instrs.extend([
+                                Instr::Mov(src_ty, Imm(0), Reg(DX, src_ty.width())),
+                                Instr::Div(src_ty, rhs.to_asm()),
+                            ]);
+                        }
+                        instrs.push(Instr::Mov(
+                            src_ty,
+                            Operand::Reg(res, src_ty.width()),
+                            dst.to_asm(),
+                        ));
+
+                        instrs
                     }
                     ir::BinOp::Equal
                     | ir::BinOp::NotEqual
@@ -699,25 +755,25 @@ impl ir::Instr {
                         vec![
                             Instr::Cmp(src_ty, rhs.to_asm(), lhs.to_asm()),
                             Instr::Mov(*dst_ty, Operand::Imm(0), dst.clone()),
-                            Instr::SetCC(op.to_asm().unwrap_right(), dst),
+                            Instr::SetCC(op.to_asm(signed).unwrap_right(), dst),
                         ]
                     }
                 }
             }
             Self::Copy { src, dst } => {
-                let src_ty = src.to_asm_type(symbols);
+                let (src_ty, _) = src.to_asm_type(symbols);
                 vec![Instr::Mov(src_ty, src.to_asm(), dst.to_asm())]
             }
             Self::Jump { target } => vec![Instr::Jmp(target.clone())],
             Self::JumpIfZero { cond, target } => {
-                let cond_ty = cond.to_asm_type(symbols);
+                let (cond_ty, _) = cond.to_asm_type(symbols);
                 vec![
                     Instr::Cmp(cond_ty, Operand::Imm(0), cond.to_asm()),
                     Instr::JmpCC(E, target.clone()),
                 ]
             }
             Self::JumpIfNotZero { cond, target } => {
-                let cond_ty = cond.to_asm_type(symbols);
+                let (cond_ty, _) = cond.to_asm_type(symbols);
                 vec![
                     Instr::Cmp(cond_ty, Operand::Imm(0), cond.to_asm()),
                     Instr::JmpCC(NE, target.clone()),
@@ -735,17 +791,17 @@ impl ir::Instr {
                     .then_some(Instr::Binary(Operator::Sub, Quadword, Imm(8), Reg(SP, 8)))
                     .into_iter()
                     .chain(ARG_REGISTERS.into_iter().zip(reg_args).map(|(reg, arg)| {
-                        let arg_ty = arg.to_asm_type(symbols);
-                        Instr::Mov(arg_ty, arg.to_asm(), Reg(reg, 4).align_width(arg_ty))
+                        let (arg_ty, _) = arg.to_asm_type(symbols);
+                        Instr::Mov(arg_ty, arg.to_asm(), Reg(reg, arg_ty.width()))
                     }))
                     .chain(stack_args.iter().rev().flat_map(|arg| {
-                        let arg_ty = arg.to_asm_type(symbols);
+                        let (arg_ty, _) = arg.to_asm_type(symbols);
 
                         match arg.to_asm() {
                             opp @ Imm(_) => vec![Instr::Push(opp)],
                             Reg(r, _) => vec![Instr::Push(Reg(r, 8))],
                             opp => vec![
-                                Instr::Mov(arg_ty, opp, Reg(AX, 0).align_width(arg_ty)),
+                                Instr::Mov(arg_ty, opp, Reg(AX, arg_ty.width())),
                                 Instr::Push(Reg(AX, 8)),
                             ],
                         }
@@ -769,27 +825,29 @@ impl ir::Value {
         match self {
             Self::Const(ast::Const::Int(i)) => Operand::Imm(i64::from(*i)),
             Self::Const(ast::Const::Long(i)) => Operand::Imm(*i),
+            Self::Const(ast::Const::UInt(i)) => Operand::Imm(i64::from(*i)),
+            Self::Const(ast::Const::ULong(i)) => Operand::Imm(*i as i64),
             Self::Var(place) => place.to_asm(),
-
-            Self::Const(ast::Const::UInt(_) | ast::Const::ULong(_)) => todo!(),
         }
     }
-    fn to_asm_type(&self, symbols: &Namespace<BSymbol>) -> AsmType {
+    fn to_asm_type(&self, symbols: &Namespace<BSymbol>) -> (AsmType, bool) {
         match self {
             ir::Value::Const(c) => c.to_asm_type(),
 
             ir::Value::Var(ir::Place(ident)) => match symbols.get(ident) {
-                Some(BSymbol::Obj { type_, .. }) => *type_,
+                Some(BSymbol::Obj { type_, signed, .. }) => (*type_, *signed),
                 e => unreachable!("{e:?}"),
             },
         }
     }
 }
 impl ast::Const {
-    fn to_asm_type(self) -> AsmType {
+    fn to_asm_type(self) -> (AsmType, bool) {
         match self {
-            ast::Const::Int(_) | ast::Const::UInt(_) => Longword,
-            ast::Const::Long(_) | ast::Const::ULong(_) => Quadword,
+            ast::Const::Int(_) => (Longword, true),
+            ast::Const::UInt(_) => (Longword, false),
+            ast::Const::Long(_) => (Quadword, true),
+            ast::Const::ULong(_) => (Quadword, false),
         }
     }
 }
@@ -808,7 +866,7 @@ impl ir::UnOp {
     }
 }
 impl ir::BinOp {
-    fn to_asm(self) -> Either<Operator, CondCode> {
+    fn to_asm(self, signed: bool) -> Either<Operator, CondCode> {
         match self {
             Self::Add => Left(Operator::Add),
             Self::Subtract => Left(Operator::Sub),
@@ -825,10 +883,14 @@ impl ir::BinOp {
 
             Self::Equal => Right(CondCode::E),
             Self::NotEqual => Right(CondCode::NE),
-            Self::LessThan => Right(CondCode::L),
-            Self::LessOrEqual => Right(CondCode::LE),
-            Self::GreaterThan => Right(CondCode::G),
-            Self::GreaterOrEqual => Right(CondCode::GE),
+            Self::LessThan if signed => Right(CondCode::L),
+            Self::LessThan => Right(CondCode::B),
+            Self::LessOrEqual if signed => Right(CondCode::LE),
+            Self::LessOrEqual => Right(CondCode::BE),
+            Self::GreaterThan if signed => Right(CondCode::G),
+            Self::GreaterThan => Right(CondCode::A),
+            Self::GreaterOrEqual if signed => Right(CondCode::GE),
+            Self::GreaterOrEqual => Right(CondCode::AE),
         }
     }
 }

@@ -301,7 +301,11 @@ token!(
         not(satisfy(|c| c == '_' || c.is_alphanum())),
     ))
     .map(|(lit, ty)| match ty {
-        IntType::Unsigned => Token::UIntLit(lit as u32),
+        // maybe this should be divorced from lexing into parsing.
+        IntType::Unsigned => match u32::try_from(lit) {
+            Ok(i) => Token::UIntLit(i),
+            Err(_) => Token::ULongLit(lit),
+        },
         IntType::UnsignedLong => Token::ULongLit(lit),
         IntType::Long => Token::LongLit(lit as i64),
         IntType::Unknown => match i32::try_from(lit) {

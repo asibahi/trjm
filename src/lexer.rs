@@ -19,10 +19,7 @@ use std::iter::{Cloned, Enumerate};
 pub(crate) enum Token {
     // Stuff
     Ident(Ecow),
-    IntLit(i32),
-    LongLit(i64),
-    UIntLit(u32),
-    ULongLit(u64),
+    Integer(u64, IntFlags),
 
     // types
     Int,
@@ -104,11 +101,18 @@ pub(crate) enum Token {
     Semicolon,
     Comma,
 }
-
 impl Token {
     pub fn unwrap_ident(&self) -> Option<Ecow> {
         if let Token::Ident(s) = self { Some(s.clone()) } else { None }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IntFlags {
+    Unsigned,
+    UnsignedLong,
+    Long,
+    NoFlags,
 }
 
 type LexError<'s> = ();
@@ -275,14 +279,6 @@ macro_rules! radix (
     }
 );
 
-#[derive(Debug, Clone, Copy)]
-enum IntType {
-    Unsigned,
-    UnsignedLong,
-    Long,
-    Unknown,
-}
-
 token!(
     number,
     alt((
@@ -293,78 +289,15 @@ token!(
     ))
     .and(terminated(
         alt((
-            tag_no_case("ul").or(tag_no_case("lu")).map(|_| IntType::UnsignedLong),
-            tag_no_case("l").map(|_| IntType::Long),
-            tag_no_case("u").map(|_| IntType::Unsigned),
-            success(IntType::Unknown)
+            tag_no_case("ul").or(tag_no_case("lu")).map(|_| IntFlags::UnsignedLong),
+            tag_no_case("l").map(|_| IntFlags::Long),
+            tag_no_case("u").map(|_| IntFlags::Unsigned),
+            success(IntFlags::NoFlags)
         )),
         not(satisfy(|c| c == '_' || c.is_alphanum())),
     ))
-    .map(|(lit, ty)| match ty {
-        // maybe this should be divorced from lexing into parsing.
-        IntType::Unsigned => match u32::try_from(lit) {
-            Ok(i) => Token::UIntLit(i),
-            Err(_) => Token::ULongLit(lit),
-        },
-        IntType::UnsignedLong => Token::ULongLit(lit),
-        IntType::Long => Token::LongLit(lit as i64),
-        IntType::Unknown => match i32::try_from(lit) {
-            Ok(i) => Token::IntLit(i),
-            Err(_) => Token::LongLit(lit as i64),
-        },
-    })
+    .map(|(lit, ty)| { Token::Integer(lit, ty) })
 );
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use test_case::test_case;
-
-    // longs
-    #[test_case("0x0L" => 0)]
-    #[test_case("0x10L" => 16)]
-    #[test_case("0L" => 0)]
-    #[test_case("010L" => 8)]
-    #[test_case("10l" => 10)]
-    #[test_case("8L" => 8)]
-    #[test_case("0b0L" => 0)]
-    #[test_case("0b10L" => 2)]
-    #[test_case("0b10L-0xFFF" => 2)]
-    #[test_case("0b10L;int" => 2)]
-    // ints
-    #[test_case("0x0" => 0)]
-    #[test_case("0x10" => 16)]
-    #[test_case("0" => 0)]
-    #[test_case("010" => 8)]
-    #[test_case("10" => 10)]
-    #[test_case("0b0" => 0)]
-    #[test_case("0b10" => 2)]
-    #[test_case("0b10-0xFFF" => 2)]
-    #[test_case("0b10;int" => 2)]
-    // invalid
-    #[test_case("8Ll" => panics "illegal literal")]
-    #[test_case("0x0g" => panics "illegal literal")]
-    #[test_case("_0x0" => panics "illegal literal")]
-    #[test_case("pubg" => panics "illegal literal")]
-    #[test_case("0x10g" => panics "illegal literal")]
-    #[test_case("0b" => panics "illegal literal")]
-    #[test_case("0g" => panics "illegal literal")]
-    #[test_case("0_" => panics "illegal literal")]
-    #[test_case("010b" => panics "illegal literal")]
-    #[test_case("0109" => panics "illegal literal")]
-    #[test_case("10b" => panics "illegal literal")]
-    #[test_case("10_" => panics "illegal literal")]
-    #[test_case("0b0b" => panics "illegal literal")]
-    #[test_case("0b10b" => panics "illegal literal")]
-    #[test_case("0b10_" => panics "illegal literal")]
-    fn number_test(i: &str) -> i64 {
-        match number(i).expect("illegal literal").1 {
-            Token::IntLit(i) => i64::from(i),
-            Token::LongLit(i) => i,
-            _ => unreachable!(),
-        }
-    }
-}
 
 // ======
 

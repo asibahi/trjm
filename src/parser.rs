@@ -2,7 +2,7 @@ use std::clone::Clone;
 
 use crate::{
     ast::*,
-    lexer::{Token, Tokens},
+    lexer::{IntFlags, Token, Tokens},
 };
 use ecow::EcoString as Ecow;
 use either::Either::{self, Left, Right};
@@ -359,8 +359,39 @@ fn parse_infixes(i: Tokens<'_>) -> ParseResult<'_, Binary<BinKind, i32>> {
     .parse_complete(i)
 }
 
+fn parse_int_literal(i: Tokens<'_>) -> ParseResult<'_, TypedExpr> {
+    macro_rules! typed_const {
+        ($ty:tt, $i:expr) => {
+            Expr::Const(Const::$ty($i)).typed(Type::$ty)
+        };
+    }
+
+    tag_token!(Token::Integer(..))
+        .map_opt(|t: Tokens<'_>| {
+            let Token::Integer(lit, ty) = t.0[0] else {
+                return None;
+            };
+
+            Some(match ty {
+                IntFlags::Unsigned => match u32::try_from(lit) {
+                    Ok(i) => typed_const!(UInt, i),
+                    Err(_) => typed_const!(ULong, lit),
+                },
+                IntFlags::UnsignedLong => typed_const!(ULong, lit),
+                IntFlags::Long => typed_const!(Long, lit as i64),
+                IntFlags::NoFlags => match i32::try_from(lit) {
+                    Ok(i) => typed_const!(Int, i),
+                    Err(_) => typed_const!(Long, lit as i64),
+                },
+            })
+        })
+        .parse_complete(i)
+}
+
 fn parse_operands(i: Tokens<'_>) -> ParseResult<'_, TypedExpr> {
     alt((
+        // const
+        parse_int_literal,
         // function call
         parse_ident
             .and(delimited(
@@ -369,15 +400,6 @@ fn parse_operands(i: Tokens<'_>) -> ParseResult<'_, TypedExpr> {
                 tag_token!(Token::ParenClose),
             ))
             .map(|(name, args)| Expr::FuncCall { name, args }.dummy_typed()),
-        // const
-        tag_token!(Token::IntLit(_) | Token::LongLit(_) | Token::UIntLit(_) | Token::ULongLit(_))
-            .map_opt(|t: Tokens<'_>| match t.0[0] {
-                Token::IntLit(i) => Some(Expr::Const(Const::Int(i)).typed(Type::Int)),
-                Token::LongLit(i) => Some(Expr::Const(Const::Long(i)).typed(Type::Long)),
-                Token::UIntLit(i) => Some(Expr::Const(Const::UInt(i)).typed(Type::UInt)),
-                Token::ULongLit(i) => Some(Expr::Const(Const::ULong(i)).typed(Type::ULong)),
-                _ => None,
-            }),
         // group
         delimited(tag_token!(Token::ParenOpen), parse_expr, tag_token!(Token::ParenClose)),
         // variable

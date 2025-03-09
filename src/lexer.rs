@@ -6,26 +6,31 @@ use nom::{
     branch::alt,
     bytes::{tag, tag_no_case, take_while},
     character::{
-        complete::{bin_digit1, hex_digit1, oct_digit0, u64},
+        complete::{bin_digit1, digit0, digit1, hex_digit1, oct_digit0, u64},
         multispace0, satisfy,
     },
-    combinator::{all_consuming, cut, not, recognize, success},
+    combinator::{all_consuming, not, opt, recognize, success},
     multi::many,
-    sequence::{preceded, terminated},
+    sequence::{preceded, separated_pair, terminated},
 };
-use std::iter::{Cloned, Enumerate};
+use std::{
+    iter::{Cloned, Enumerate},
+    str::FromStr,
+};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Token {
     // Stuff
     Ident(Ecow),
     Integer(u64, IntFlags),
+    Float(f64),
 
     // types
     Int,
     Long,
     Signed,
     Unsigned,
+    Double,
 
     // Keywords
     Void, // also doubtful
@@ -107,7 +112,7 @@ impl Token {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum IntFlags {
     Unsigned,
     UnsignedLong,
@@ -116,7 +121,7 @@ pub enum IntFlags {
 }
 
 type LexError<'s> = ();
-// type LexError<'s> = (&'s str, nom::ErrorKind);
+// type LexError<'s> = (&'s str, nom::error::ErrorKind);
 
 pub fn lex(i: &str) -> Result<Vec<Token>, LexError<'_>> {
     let tokens = alt((
@@ -168,6 +173,7 @@ pub fn lex(i: &str) -> Result<Vec<Token>, LexError<'_>> {
         //
         keyword_or_identifier,
         number,
+        float,
     ));
 
     all_consuming(many(1.., tokens)).parse_complete(i.trim()).finish().map(|t| t.1)
@@ -253,6 +259,7 @@ token!(
         "long" => Token::Long,
         "signed" => Token::Signed,
         "unsigned" => Token::Unsigned,
+        "double" => Token::Double,
         "void" => Token::Void,
         "return" => Token::Return,
         "if" => Token::If,
@@ -274,7 +281,7 @@ token!(
 
 macro_rules! radix (
     ($tag: expr, $parser:ident, $radix:literal) =>{
-        preceded($tag, cut($parser))
+        preceded($tag, $parser)
         .map(|s: &str| u64::from_str_radix(s, $radix).unwrap_or_default())
     }
 );
@@ -294,9 +301,25 @@ token!(
             tag_no_case("u").map(|_| IntFlags::Unsigned),
             success(IntFlags::NoFlags)
         )),
-        not(satisfy(|c| c == '_' || c.is_alphanum())),
+        not(satisfy(|c| c == '.' || c == '_' || c.is_alphanum())),
     ))
     .map(|(lit, ty)| { Token::Integer(lit, ty) })
+);
+
+token!(
+    float,
+    // no hex floats or single floats for you.
+    recognize(
+        alt((
+            separated_pair(digit1, tag("."), digit0),
+            separated_pair(digit0, tag("."), digit1),
+            digit1.and(success("")),
+        ))
+        .and(opt(preceded(tag_no_case("e").and(opt(tag("+").or(tag("-")))), digit1,)))
+        .and(not(satisfy(|c| c == '.' || c == '_' || c.is_alphanum())),)
+    )
+    .map_res(f64::from_str)
+    .map(Token::Float)
 );
 
 // ======

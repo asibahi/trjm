@@ -24,9 +24,12 @@ pub fn compile(input: &PathBuf, mode: Mode) -> Result<PathBuf, u8> {
         return Err(2);
     };
 
-    let Ok(tokens) = lexer::lex(&code) else {
-        eprintln!("failed to lex.");
-        return Err(3);
+    let tokens = match lexer::lex(&code) {
+        Ok(tokens) => tokens,
+        Err(e) => {
+            eprintln!("failed to lex. {e:#?}");
+            return Err(4);
+        }
     };
 
     if matches!(mode, Mode::Lex) {

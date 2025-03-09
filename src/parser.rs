@@ -58,17 +58,26 @@ fn parse_type(i: Tokens<'_>) -> ParseResult<'_, Type> {
             .map(|t: Tokens<'_>| t.0[0].clone()),
     )
     .map_opt(|list: Vec<_>| {
-        let set = FxHashSet::from_iter(&list);
+        let has_dupes = 'dupes: {
+            for i in 0..list.len() {
+                for j in i + 1..list.len() {
+                    if list[i] == list[j] {
+                        break 'dupes true;
+                    }
+                }
+            }
+            false
+        };
 
-        if set.is_empty()
-            || set.len() < list.len()
-            || (set.contains(&Token::Signed) && set.contains(&Token::Unsigned))
+        if list.is_empty()
+            || has_dupes
+            || (list.contains(&Token::Signed) && list.contains(&Token::Unsigned))
         {
             return None;
         }
 
-        let u = set.contains(&Token::Unsigned);
-        let l = set.contains(&Token::Long);
+        let u = list.contains(&Token::Unsigned);
+        let l = list.contains(&Token::Long);
 
         Some(match (u, l) {
             (true, true) => Type::ULong,
@@ -257,7 +266,6 @@ enum BinKind {
     CompoundAssignment(BinaryOp),
 }
 use BinKind::*;
-use rustc_hash::FxHashSet;
 
 macro_rules! binop {
     ($prec:literal, $token:ident, $binop:ident) => {

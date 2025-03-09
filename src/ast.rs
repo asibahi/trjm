@@ -117,17 +117,43 @@ impl Display for Type {
 }
 
 impl Type {
+    fn size(&self) -> usize {
+        match self {
+            Type::Int | Type::UInt => 4,
+            Type::Long | Type::ULong => 8,
+            Type::Func { .. } => unreachable!(
+                "function types don't have size. why is function in the same type anyway ?"
+            ),
+        }
+    }
+    fn signed(&self) -> bool {
+        match self {
+            Type::Int | Type::Long => true,
+            Type::UInt | Type::ULong => false,
+            Type::Func { .. } => unreachable!(
+                "function types don't have size. why is function in the same type anyway ?"
+            ),
+        }
+    }
     fn get_common_type(self, other: Self) -> Self {
-        // if either of these is a function shouldn't we panic ?
         // why is function in the same type anyway ?
-        if self == other { self } else { Type::Long }
+        if self == other {
+            self
+        } else if self.size() == other.size() {
+            if self.signed() { other } else { self }
+        } else if self.size() > other.size() {
+            self
+        } else {
+            other
+        }
     }
     pub fn zeroed_static(&self) -> StaticInit {
         match self {
             Type::Int => StaticInit::Int(0),
             Type::Long => StaticInit::Long(0),
+            Type::UInt => StaticInit::UInt(0),
+            Type::ULong => StaticInit::ULong(0),
             Type::Func { .. } => unreachable!("function static value not a thing"),
-            _ => todo!(),
         }
     }
 }
@@ -161,10 +187,14 @@ impl Display for InitValue {
 pub enum StaticInit {
     Int(i32),
     Long(i64),
+    UInt(u32),
+    ULong(u64),
 }
 impl StaticInit {
     pub fn is_zero(self) -> bool {
-        matches!(self, StaticInit::Int(0) | StaticInit::Long(0))
+        matches!(self, |StaticInit::Int(0)| StaticInit::Long(0)
+            | StaticInit::UInt(0)
+            | StaticInit::ULong(0))
     }
 }
 impl Display for StaticInit {
@@ -172,6 +202,9 @@ impl Display for StaticInit {
         match self {
             StaticInit::Int(i) => write!(f, "long   {i}"),
             StaticInit::Long(i) => write!(f, "quad   {i}"),
+            // todo
+            StaticInit::UInt(i) => write!(f, "long   {i}"),
+            StaticInit::ULong(i) => write!(f, "quad   {i}"),
         }
     }
 }
@@ -298,7 +331,7 @@ impl VarDecl {
     fn type_check_file(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
         let mut init = match self.init.clone() {
             Some(TypedExpr { expr: Expr::Const(cnst), .. }) => {
-                Initial(cnst.into_static_init(self.var_type.clone()))
+                Initial(cnst.into_static_init(&self.var_type))
             }
             None if self.sc == StorageClass::Extern => NoInit,
             None => Tentative,
@@ -363,7 +396,7 @@ impl VarDecl {
             StorageClass::Static => {
                 let init_value = match self.init.take() {
                     Some(TypedExpr { expr: Expr::Const(cnst), .. }) => {
-                        Initial(cnst.into_static_init(self.var_type.clone()))
+                        Initial(cnst.into_static_init(&self.var_type))
                     }
                     None => Initial(StaticInit::Int(0)),
                     _ => anyhow::bail!("non-constant initializer on local static variable"),
@@ -1698,30 +1731,35 @@ impl Display for Const {
     }
 }
 
-#[allow(clippy::cast_possible_truncation)]
-impl Const {
-    fn into_static_init(self, target_type: Type) -> StaticInit {
-        match (self, target_type) {
+macro_rules! const_cast {
+    ($self:ident, $target_type:ident, [$($types:tt),+ $(,)?]) => {
+        #[allow(clippy::cast_possible_truncation)]
+        #[allow(clippy::cast_possible_wrap)]
+        #[allow(clippy::cast_sign_loss)]
+        #[allow(clippy::cast_lossless)]
+        match ($self, $target_type) {
             (_, Type::Func { .. }) => unreachable!(),
-
-            (Const::Int(i), Type::Int) => StaticInit::Int(i),
-            (Const::Int(i), Type::Long) => StaticInit::Long(i64::from(i)),
-            (Const::Long(i), Type::Int) => StaticInit::Int(i as i32),
-            (Const::Long(i), Type::Long) => StaticInit::Long(i),
-
-            _ => todo!(),
+            $(
+                (Self::Int(i), Type::$types) => Self::$types(i as _),
+                (Self::Long(i), Type::$types) => Self::$types(i as _),
+                (Self::UInt(i), Type::$types) => Self::$types(i as _),
+                (Self::ULong(i), Type::$types) => Self::$types(i as _),
+            )+
         }
-    }
+    };
+}
+
+impl Const {
     fn cast_const(self, target_type: &Type) -> Self {
-        match (self, target_type) {
-            (_, Type::Func { .. }) => unreachable!(),
-
-            (Const::Int(i), Type::Int) => Self::Int(i),
-            (Const::Int(i), Type::Long) => Self::Long(i64::from(i)),
-            (Const::Long(i), Type::Int) => Self::Int(i as i32),
-            (Const::Long(i), Type::Long) => Self::Long(i),
-
-            _ => todo!(),
+        const_cast!(self, target_type, [Int, Long, UInt, ULong])
+    }
+    fn into_static_init(self, target_type: &Type) -> StaticInit {
+        let matching_const = self.cast_const(target_type);
+        match matching_const {
+            Self::Int(i) => StaticInit::Int(i),
+            Self::Long(i) => StaticInit::Long(i),
+            Self::UInt(i) => StaticInit::UInt(i),
+            Self::ULong(i) => StaticInit::ULong(i),
         }
     }
 }

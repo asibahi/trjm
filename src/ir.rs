@@ -63,6 +63,10 @@ pub enum Instr {
     Truncate { src: Value, dst: Place },
     SignExtend { src: Value, dst: Place },
     ZeroExtend { src: Value, dst: Place },
+    DoubleToInt { src: Value, dst: Place },
+    DoubleToUInt { src: Value, dst: Place },
+    IntToDouble { src: Value, dst: Place },
+    UIntToDouble { src: Value, dst: Place },
 
     Unary { op: UnOp, src: Value, dst: Place },
     Binary { op: BinOp, lhs: Value, rhs: Value, dst: Place },
@@ -80,6 +84,12 @@ impl Display for Instr {
             Self::Truncate { src, dst } => write!(f, "{:<8} <- truncate {src}", dst.0),
             Self::SignExtend { src, dst } => write!(f, "{:<8} <- sign_extend {src}", dst.0),
             Self::ZeroExtend { src, dst } => write!(f, "{:<8} <- zero_extend {src}", dst.0),
+
+            Self::DoubleToInt { src, dst } => write!(f, "{:<8} <- dbl_to_int {src}", dst.0),
+            Self::DoubleToUInt { src, dst } => write!(f, "{:<8} <- dbl_to_uint {src}", dst.0),
+            Self::IntToDouble { src, dst } => write!(f, "{:<8} <- int_to_dbl {src}", dst.0),
+            Self::UIntToDouble { src, dst } => write!(f, "{:<8} <- uint_to_dbl {src}", dst.0),
+
             Self::Unary { op, src, dst } => write!(f, "{:<8} <- {op} {src}", dst.0),
             Self::Binary { op, lhs, rhs, dst } => write!(f, "{:<8} <- {lhs} {op} {rhs}", dst.0),
             Self::Copy { src, dst } => write!(f, "{:<8} <- copy {src}", dst.0),
@@ -542,13 +552,21 @@ impl ast::Expr {
                 let dst_var = make_ir_variable("cst", expr_type.clone(), symbols);
                 let dst = dst_var.clone();
 
-                match target.size().cmp(&src_ty.size()) {
-                    Ordering::Equal => instrs.push(Instr::Copy { src, dst }),
-                    Ordering::Less => instrs.push(Instr::Truncate { src, dst }),
-                    _ if src_ty.signed() => instrs.push(Instr::SignExtend { src, dst }),
-                    _ => instrs.push(Instr::ZeroExtend { src, dst }),
-                }
+                let cast_instr = match (target, src_ty) {
+                    (Type::Int | Type::Long, Type::Double) => Instr::IntToDouble { src, dst },
+                    (Type::UInt | Type::ULong, Type::Double) => Instr::UIntToDouble { src, dst },
+                    (Type::Double, Type::Int | Type::Long) => Instr::DoubleToInt { src, dst },
+                    (Type::Double, Type::UInt | Type::ULong) => Instr::DoubleToUInt { src, dst },
 
+                    _ => match target.size().cmp(&src_ty.size()) {
+                        Ordering::Equal => Instr::Copy { src, dst },
+                        Ordering::Less => Instr::Truncate { src, dst },
+                        _ if src_ty.signed() => Instr::SignExtend { src, dst },
+                        _ => Instr::ZeroExtend { src, dst },
+                    },
+                };
+
+                instrs.push(cast_instr);
                 Value::Var(dst_var)
             }
         }

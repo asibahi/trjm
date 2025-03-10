@@ -673,6 +673,11 @@ impl ir::Instr {
             Self::Truncate { src, dst } => vec![Instr::Mov(Longword, src.to_asm(), dst.to_asm())],
             Self::ZeroExtend { src, dst } => vec![Instr::MovZeroExtend(src.to_asm(), dst.to_asm())],
 
+            Self::DoubleToInt { ..} =>todo!(),
+            Self::DoubleToUInt { ..} =>todo!(),
+            Self::IntToDouble { ..} =>todo!(),
+            Self::UIntToDouble { ..} =>todo!(),
+
             Self::Unary { op: ir::UnOp::Not, src, dst } => {
                 let (src_ty, _) = src.to_asm_type(symbols);
                 let Some(BSymbol::Obj { type_: dst_ty, .. }) = symbols.get(&dst.0) else {

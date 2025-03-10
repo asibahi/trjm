@@ -128,7 +128,7 @@ impl Type {
                 "function types don't have size. why is function in the same type anyway ?"
             ),
 
-            Self::Double => todo!(),
+            Self::Double => unreachable!("double size unused for IR"),
         }
     }
     pub fn signed(&self) -> bool {
@@ -138,8 +138,7 @@ impl Type {
             Self::Func { .. } => unreachable!(
                 "function types don't have size. why is function in the same type anyway ?"
             ),
-
-            Self::Double => todo!(),
+            Self::Double => unreachable!("doubled signedness unused for IR"),
         }
     }
     fn get_common_type(self, other: Self) -> Self {
@@ -219,7 +218,7 @@ impl Display for StaticInit {
             Self::UInt(i) => write!(f, "long   {i}"),
             Self::ULong(i) => write!(f, "quad   {i}"),
 
-            Self::Double(_) => todo!(),
+            Self::Double(i) => write!(f, "double  {i}"),
         }
     }
 }

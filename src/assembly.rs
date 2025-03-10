@@ -40,6 +40,7 @@ impl From<TypeCtx> for BSymbol {
             (Type::ULong, Local) => {
                 BSymbol::Obj { type_: Quadword, signed: false, is_static: false }
             }
+            (Type::Double, _) => todo!(),
         }
     }
 }
@@ -649,6 +650,7 @@ impl ir::TopLevel {
                 alignment: match type_ {
                     Type::Int | Type::UInt => 4,
                     Type::Long | Type::ULong => 8,
+                    Type::Double => todo!(),
                     Type::Func { .. } => unreachable!(),
                 },
             },
@@ -827,6 +829,7 @@ impl ir::Value {
             Self::Const(ast::Const::Long(i)) => Operand::Imm(*i),
             Self::Const(ast::Const::UInt(i)) => Operand::Imm(i64::from(*i)),
             Self::Const(ast::Const::ULong(i)) => Operand::Imm(*i as i64),
+            Self::Const(ast::Const::Double(_)) => todo!(),
             Self::Var(place) => place.to_asm(),
         }
     }
@@ -848,6 +851,7 @@ impl ast::Const {
             ast::Const::UInt(_) => (Longword, false),
             ast::Const::Long(_) => (Quadword, true),
             ast::Const::ULong(_) => (Quadword, false),
+            ast::Const::Double(_) => todo!(),
         }
     }
 }

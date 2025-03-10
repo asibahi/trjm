@@ -54,10 +54,18 @@ fn parse_type(i: Tokens<'_>) -> ParseResult<'_, Type> {
 
     many(
         1..,
-        tag_token!(Token::Int | Token::Long | Token::Signed | Token::Unsigned)
+        tag_token!(Token::Int | Token::Long | Token::Double | Token::Signed | Token::Unsigned)
             .map(|t: Tokens<'_>| t.0[0].clone()),
     )
     .map_opt(|list: Vec<_>| {
+        use Token::*;
+
+        if list == vec![Double] {
+            return Some(Type::Double);
+        } else if list.contains(&Double) {
+            return None;
+        }
+
         let has_dupes = 'dupes: {
             for i in 0..list.len() {
                 for j in i + 1..list.len() {
@@ -69,15 +77,12 @@ fn parse_type(i: Tokens<'_>) -> ParseResult<'_, Type> {
             false
         };
 
-        if list.is_empty()
-            || has_dupes
-            || (list.contains(&Token::Signed) && list.contains(&Token::Unsigned))
-        {
+        if list.is_empty() || has_dupes || (list.contains(&Signed) && list.contains(&Unsigned)) {
             return None;
         }
 
-        let u = list.contains(&Token::Unsigned);
-        let l = list.contains(&Token::Long);
+        let u = list.contains(&Unsigned);
+        let l = list.contains(&Long);
 
         Some(match (u, l) {
             (true, true) => Type::ULong,
@@ -99,6 +104,7 @@ fn parse_specifiers(i: Tokens<'_>) -> ParseResult<'_, (Type, StorageClass)> {
             tag_token!(Token::Int => Token::Int).map(Right),
             tag_token!(Token::Signed => Token::Signed).map(Right),
             tag_token!(Token::Unsigned => Token::Unsigned).map(Right),
+            tag_token!(Token::Double => Token::Double).map(Right),
         )),
         || (Vec::new(), Vec::new()),
         |(mut sc, mut types), item| {
@@ -137,7 +143,6 @@ fn parse_func_decl(i: Tokens<'_>) -> ParseResult<'_, FuncDecl> {
     let (i, (ret, sc)) = parse_specifiers.parse_complete(i)?;
 
     let (i, name) = parse_ident.parse_complete(i)?;
-
     let (i, params) = delimited(
         tag_token!(Token::ParenOpen),
         alt((
@@ -367,39 +372,42 @@ fn parse_infixes(i: Tokens<'_>) -> ParseResult<'_, Binary<BinKind, i32>> {
     .parse_complete(i)
 }
 
+macro_rules! typed_const {
+    ($ty:tt, $i:expr) => {
+        Expr::Const(Const::$ty($i)).typed(Type::$ty)
+    };
+}
+
 fn parse_int_literal(i: Tokens<'_>) -> ParseResult<'_, TypedExpr> {
-    macro_rules! typed_const {
-        ($ty:tt, $i:expr) => {
-            Expr::Const(Const::$ty($i)).typed(Type::$ty)
-        };
-    }
-
     tag_token!(Token::Integer(..))
-        .map_opt(|t: Tokens<'_>| {
-            let Token::Integer(lit, ty) = t.0[0] else {
-                return None;
-            };
+        .map(|t: Tokens<'_>| {
+            let Token::Integer(lit, ty) = t.0[0] else { unreachable!() };
 
-            Some(match ty {
-                IntFlags::Unsigned => match u32::try_from(lit) {
+            match ty {
+                IntFlags::U => match u32::try_from(lit) {
                     Ok(i) => typed_const!(UInt, i),
                     Err(_) => typed_const!(ULong, lit),
                 },
-                IntFlags::UnsignedLong => typed_const!(ULong, lit),
-                IntFlags::Long => typed_const!(Long, lit as i64),
+                IntFlags::UL => typed_const!(ULong, lit),
+                IntFlags::L => typed_const!(Long, lit as i64),
                 IntFlags::NoFlags => match i32::try_from(lit) {
                     Ok(i) => typed_const!(Int, i),
                     Err(_) => typed_const!(Long, lit as i64),
                 },
-            })
+            }
         })
         .parse_complete(i)
 }
 
 fn parse_operands(i: Tokens<'_>) -> ParseResult<'_, TypedExpr> {
     alt((
-        // const
+        // const int
         parse_int_literal,
+        // const float
+        tag_token!(Token::Float(_)).map(|tokens: Tokens<'_>| {
+            let Token::Float(cnst) = &tokens.0[0] else { unreachable!() };
+            typed_const!(Double, *cnst)
+        }),
         // function call
         parse_ident
             .and(delimited(

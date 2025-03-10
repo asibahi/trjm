@@ -3,8 +3,9 @@ use ecow::{EcoString as Ecow, eco_format};
 use either::Either::{self, Left, Right};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::{
-    collections::{HashSet, hash_map::Entry},
+    collections::hash_map::Entry,
     fmt::{Display, Formatter, Write},
+    hash::Hash,
     ops::Deref,
     sync::atomic::Ordering::Relaxed,
 };
@@ -23,7 +24,7 @@ impl IdCtx {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TypeCtx {
     pub type_: Type,
     pub attr: Attributes,
@@ -80,7 +81,7 @@ impl Program {
     }
 
     pub fn compile(mut self) -> ir::Program {
-        let mut buf = vec![];
+        let mut buf = Vec::new();
         let mut symbols = std::mem::take(&mut self.symbols);
 
         self.to_ir(&mut buf, &mut symbols)
@@ -93,16 +94,18 @@ pub enum Type {
     Long,
     UInt,
     ULong,
+    Double,
     Func { params: Vec<Type>, ret: Box<Type> },
 }
 impl Display for Type {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Type::Int => f.pad("int"),
-            Type::Long => f.pad("long"),
-            Type::UInt => f.pad("uint"),
-            Type::ULong => f.pad("ulong"),
-            Type::Func { params, ret } => {
+            Self::Int => f.pad("int"),
+            Self::Long => f.pad("long"),
+            Self::UInt => f.pad("uint"),
+            Self::ULong => f.pad("ulong"),
+            Self::Double => f.pad("double"),
+            Self::Func { params, ret } => {
                 let mut buf = Ecow::new();
                 write!(buf, "func (")?;
                 for param in params {
@@ -119,20 +122,24 @@ impl Display for Type {
 impl Type {
     pub fn size(&self) -> usize {
         match self {
-            Type::Int | Type::UInt => 4,
-            Type::Long | Type::ULong => 8,
-            Type::Func { .. } => unreachable!(
+            Self::Int | Self::UInt => 4,
+            Self::Long | Self::ULong => 8,
+            Self::Func { .. } => unreachable!(
                 "function types don't have size. why is function in the same type anyway ?"
             ),
+
+            Self::Double => todo!(),
         }
     }
     pub fn signed(&self) -> bool {
         match self {
-            Type::Int | Type::Long => true,
-            Type::UInt | Type::ULong => false,
-            Type::Func { .. } => unreachable!(
+            Self::Int | Self::Long => true,
+            Self::UInt | Self::ULong => false,
+            Self::Func { .. } => unreachable!(
                 "function types don't have size. why is function in the same type anyway ?"
             ),
+
+            Self::Double => todo!(),
         }
     }
     fn get_common_type(self, other: Self) -> Self {
@@ -149,16 +156,19 @@ impl Type {
     }
     pub fn zeroed_static(&self) -> StaticInit {
         match self {
-            Type::Int => StaticInit::Int(0),
-            Type::Long => StaticInit::Long(0),
-            Type::UInt => StaticInit::UInt(0),
-            Type::ULong => StaticInit::ULong(0),
-            Type::Func { .. } => unreachable!("function static value not a thing"),
+            Self::Int => StaticInit::Int(0),
+            Self::Long => StaticInit::Long(0),
+            Self::UInt => StaticInit::UInt(0),
+            Self::ULong => StaticInit::ULong(0),
+            Self::Func { .. } => unreachable!("function static value not a thing"),
+
+            // maybe? todo
+            Self::Double => StaticInit::Double(0.0),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Attributes {
     Func { defined: bool, global: bool },
     Static { init: InitValue, global: bool },
@@ -166,7 +176,7 @@ pub enum Attributes {
 }
 pub use Attributes::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InitValue {
     Tentative,
     Initial(StaticInit),
@@ -183,12 +193,13 @@ impl Display for InitValue {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum StaticInit {
     Int(i32),
     Long(i64),
     UInt(u32),
     ULong(u64),
+    Double(f64),
 }
 impl StaticInit {
     pub fn is_zero(self) -> bool {
@@ -200,11 +211,13 @@ impl StaticInit {
 impl Display for StaticInit {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            StaticInit::Int(i) => write!(f, "long   {i}"),
-            StaticInit::Long(i) => write!(f, "quad   {i}"),
-            // todo
-            StaticInit::UInt(i) => write!(f, "long   {i}"),
-            StaticInit::ULong(i) => write!(f, "quad   {i}"),
+            // this is used for assembly
+            Self::Int(i) => write!(f, "long   {i}"),
+            Self::Long(i) => write!(f, "quad   {i}"),
+            Self::UInt(i) => write!(f, "long   {i}"),
+            Self::ULong(i) => write!(f, "quad   {i}"),
+
+            Self::Double(_) => todo!(),
         }
     }
 }
@@ -1261,7 +1274,7 @@ impl Stmt {
                     .ret
                     .ok_or(anyhow::anyhow!("switch type must be kbown at this point"))?;
 
-                let mut switchctx = HashSet::default();
+                let mut switchctx = FxHashSet::default();
                 let body =
                     Box::new(body.resolve_switch_statements(Some(&mut switchctx), &switch_type)?);
 
@@ -1681,6 +1694,7 @@ impl Expr {
                 Const::Long(_) => Ok(self.typed(Type::Long)),
                 Const::UInt(_) => Ok(self.typed(Type::UInt)),
                 Const::ULong(_) => Ok(self.typed(Type::ULong)),
+                Const::Double(_) => Ok(self.typed(Type::Double)),
             },
             Self::Conditional { cond, then, else_ } => {
                 let cond = Box::new(cond.type_check(symbols)?);
@@ -1707,24 +1721,33 @@ impl Expr {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Const {
     Int(i32),
     Long(i64),
     UInt(u32),
     ULong(u64),
+    Double(f64),
+}
+// Const values do not include NaN. Hash is needed for switch statements.
+impl Eq for Const {}
+impl Hash for Const {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
+    }
 }
 
 impl Display for Const {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         // this is used for assembly generation for some reason.
         match self {
-            Const::Int(i) => write!(f, "{i}"),
-            Const::Long(i) => write!(f, "{i}"),
+            Self::Int(i) => write!(f, "{i}"),
+            Self::Long(i) => write!(f, "{i}"),
+            Self::UInt(i) => write!(f, "{i}"),
+            Self::ULong(i) => write!(f, "{i}"),
 
             // maybe?
-            Const::UInt(i) => write!(f, "{i}"),
-            Const::ULong(i) => write!(f, "{i}"),
+            Self::Double(i) => write!(f, "{i}"),
         }
     }
 }
@@ -1739,6 +1762,9 @@ macro_rules! const_cast {
                 (Self::Long(i), Type::$types) => Self::$types(i as _),
                 (Self::UInt(i), Type::$types) => Self::$types(i as _),
                 (Self::ULong(i), Type::$types) => Self::$types(i as _),
+
+                // maybe?
+                (Self::Double(i), Type::$types) => Self::$types(i as _),
             )+
         }
     };
@@ -1746,7 +1772,7 @@ macro_rules! const_cast {
 
 impl Const {
     fn cast_const(self, target_type: &Type) -> Self {
-        const_cast!(self, target_type, [Int, Long, UInt, ULong])
+        const_cast!(self, target_type, [Int, Long, UInt, ULong, Double])
     }
     fn into_static_init(self, target_type: &Type) -> StaticInit {
         let matching_const = self.cast_const(target_type);
@@ -1755,6 +1781,7 @@ impl Const {
             Self::Long(i) => StaticInit::Long(i),
             Self::UInt(i) => StaticInit::UInt(i),
             Self::ULong(i) => StaticInit::ULong(i),
+            Self::Double(i) => StaticInit::Double(i),
         }
     }
 }

@@ -114,9 +114,9 @@ impl Token {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum IntFlags {
-    Unsigned,
-    UnsignedLong,
-    Long,
+    U,
+    UL,
+    L,
     NoFlags,
 }
 
@@ -296,9 +296,9 @@ token!(
     ))
     .and(terminated(
         alt((
-            tag_no_case("ul").or(tag_no_case("lu")).map(|_| IntFlags::UnsignedLong),
-            tag_no_case("l").map(|_| IntFlags::Long),
-            tag_no_case("u").map(|_| IntFlags::Unsigned),
+            tag_no_case("ul").or(tag_no_case("lu")).map(|_| IntFlags::UL),
+            tag_no_case("l").map(|_| IntFlags::L),
+            tag_no_case("u").map(|_| IntFlags::U),
             success(IntFlags::NoFlags)
         )),
         not(satisfy(|c| c == '.' || c == '_' || c.is_alphanum())),

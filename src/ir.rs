@@ -589,6 +589,7 @@ fn postfix_prefix_instrs(
         Type::Long => Const::Long(1),
         Type::UInt => Const::UInt(1),
         Type::ULong => Const::ULong(1),
+        Type::Double => Const::Double(1.0),
         Type::Func { .. } => unreachable!(),
     };
 

@@ -146,6 +146,8 @@ impl Type {
         // why is function in the same type anyway ?
         if self == other {
             self
+        } else if self == Type::Double || other == Type::Double {
+            Self::Double
         } else if self.size() == other.size() {
             if self.signed() { other } else { self }
         } else if self.size() > other.size() {
@@ -1572,6 +1574,9 @@ impl Expr {
                 let expr = Box::new(expr.type_check(symbols)?);
 
                 let ty = match op {
+                    UnaryOp::Complement if expr.ret == Some(Type::Double) => {
+                        anyhow::bail!("cannot complement a double")
+                    }
                     UnaryOp::Not => Type::Int,
                     _ => expr.clone().ret.expect("unary type should be known"),
                 };
@@ -1586,6 +1591,11 @@ impl Expr {
                 match op {
                     BinaryOp::And | BinaryOp::Or => {
                         return Ok(Self::Binary { op, lhs, rhs }.typed(Type::Int));
+                    }
+                    BinaryOp::Reminder
+                        if lhs.ret == Some(Type::Double) || rhs.ret == Some(Type::Double) =>
+                    {
+                        anyhow::bail!("cannot modulo a double")
                     }
                     _ => {}
                 }

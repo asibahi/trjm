@@ -1,0 +1,311 @@
+======================================================================
+FAIL: test_valid/explicit_casts/cvttsd2si_rewrite (test_framework.basic.TestChapter13.test_valid/explicit_casts/cvttsd2si_rewrite)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 603, in test_run
+    self.compile_and_run(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 402, in compile_and_run
+    self.validate_runs(source_file, result)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 308, in validate_runs
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        expected_retcode,
+        ^^^^^^^^^^^^^^^^^
+        actual.returncode,
+        ^^^^^^^^^^^^^^^^^^
+        msg=build_error_message(expected_retcode, expected_stdout, actual, exe),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: Incorrect behavior in /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_13/valid/explicit_casts/cvttsd2si_rewrite
+* Bad return code: expected 0 and got 2
+
+======================================================================
+FAIL: test_valid/explicit_casts/double_to_signed (test_framework.basic.TestChapter13.test_valid/explicit_casts/double_to_signed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 603, in test_run
+    self.compile_and_run(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 402, in compile_and_run
+    self.validate_runs(source_file, result)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 308, in validate_runs
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        expected_retcode,
+        ^^^^^^^^^^^^^^^^^
+        actual.returncode,
+        ^^^^^^^^^^^^^^^^^^
+        msg=build_error_message(expected_retcode, expected_stdout, actual, exe),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: Incorrect behavior in /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_13/valid/explicit_casts/double_to_signed
+* Bad return code: expected 0 and got 1
+
+======================================================================
+FAIL: test_valid/explicit_casts/double_to_unsigned (test_framework.basic.TestChapter13.test_valid/explicit_casts/double_to_unsigned)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 603, in test_run
+    self.compile_and_run(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 385, in compile_and_run
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        compile_result.returncode,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+        0,
+        ^^
+        msg=f"compilation of {source_file} failed with error:\n{compile_result.stderr}",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: compilation of /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_13/valid/explicit_casts/double_to_unsigned.c failed with error:
+assembler failed:
+/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_13/valid/explicit_casts/double_to_unsigned.s:9:7: error: invalid operand for instruction
+ movl %r10, -12(%rbp)
+      ^~~~
+
+
+
+======================================================================
+FAIL: test_valid/explicit_casts/rewrite_cvttsd2si_regression (test_framework.basic.TestChapter13.test_valid/explicit_casts/rewrite_cvttsd2si_regression)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 603, in test_run
+    self.compile_and_run(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 402, in compile_and_run
+    self.validate_runs(source_file, result)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 308, in validate_runs
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        expected_retcode,
+        ^^^^^^^^^^^^^^^^^
+        actual.returncode,
+        ^^^^^^^^^^^^^^^^^^
+        msg=build_error_message(expected_retcode, expected_stdout, actual, exe),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: Incorrect behavior in /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_13/valid/explicit_casts/rewrite_cvttsd2si_regression
+* Bad return code: expected 0 and got 255
+
+======================================================================
+FAIL: test_valid/explicit_casts/unsigned_to_double (test_framework.basic.TestChapter13.test_valid/explicit_casts/unsigned_to_double)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 603, in test_run
+    self.compile_and_run(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 385, in compile_and_run
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        compile_result.returncode,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+        0,
+        ^^
+        msg=f"compilation of {source_file} failed with error:\n{compile_result.stderr}",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: compilation of /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_13/valid/explicit_casts/unsigned_to_double.c failed with error:
+assembler failed:
+/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_13/valid/explicit_casts/unsigned_to_double.s:8:17: error: invalid operand for instruction
+ movl -4(%rbp), %r11
+                ^~~~
+
+
+
+======================================================================
+FAIL: test_valid/floating_expressions/arithmetic_ops (test_framework.basic.TestChapter13.test_valid/floating_expressions/arithmetic_ops)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 603, in test_run
+    self.compile_and_run(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 385, in compile_and_run
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        compile_result.returncode,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+        0,
+        ^^
+        msg=f"compilation of {source_file} failed with error:\n{compile_result.stderr}",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: compilation of /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_13/valid/floating_expressions/arithmetic_ops.c failed with error:
+assembler failed:
+/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_13/valid/floating_expressions/arithmetic_ops.s:102:8: error: invalid operand for instruction
+ movsd $0, -32(%rbp)
+       ^~
+
+
+
+======================================================================
+FAIL: test_valid/floating_expressions/logical (test_framework.basic.TestChapter13.test_valid/floating_expressions/logical)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 603, in test_run
+    self.compile_and_run(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 385, in compile_and_run
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        compile_result.returncode,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+        0,
+        ^^
+        msg=f"compilation of {source_file} failed with error:\n{compile_result.stderr}",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: compilation of /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_13/valid/floating_expressions/logical.c failed with error:
+assembler failed:
+/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_13/valid/floating_expressions/logical.s:43:8: error: invalid operand for instruction
+ movsd $0, -8(%rbp)
+       ^~
+/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_13/valid/floating_expressions/logical.s:55:8: error: invalid operand for instruction
+ movsd $0, -16(%rbp)
+       ^~
+/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_13/valid/floating_expressions/logical.s:70:8: error: invalid operand for instruction
+ movsd $0, -32(%rbp)
+       ^~
+
+
+
+======================================================================
+FAIL: test_valid/function_calls/use_arg_after_fun_call (test_framework.basic.TestChapter13.test_valid/function_calls/use_arg_after_fun_call)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 603, in test_run
+    self.compile_and_run(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 402, in compile_and_run
+    self.validate_runs(source_file, result)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 308, in validate_runs
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        expected_retcode,
+        ^^^^^^^^^^^^^^^^^
+        actual.returncode,
+        ^^^^^^^^^^^^^^^^^^
+        msg=build_error_message(expected_retcode, expected_stdout, actual, exe),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: Incorrect behavior in /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_13/valid/function_calls/use_arg_after_fun_call
+* Bad return code: expected 4 and got 0
+
+======================================================================
+FAIL: test_valid/implicit_casts/common_type (test_framework.basic.TestChapter13.test_valid/implicit_casts/common_type)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 603, in test_run
+    self.compile_and_run(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 402, in compile_and_run
+    self.validate_runs(source_file, result)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 308, in validate_runs
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        expected_retcode,
+        ^^^^^^^^^^^^^^^^^
+        actual.returncode,
+        ^^^^^^^^^^^^^^^^^^
+        msg=build_error_message(expected_retcode, expected_stdout, actual, exe),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: Incorrect behavior in /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_13/valid/implicit_casts/common_type
+* Bad return code: expected 0 and got 2
+
+======================================================================
+FAIL: test_valid/implicit_casts/convert_for_assignment (test_framework.basic.TestChapter13.test_valid/implicit_casts/convert_for_assignment)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 603, in test_run
+    self.compile_and_run(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 402, in compile_and_run
+    self.validate_runs(source_file, result)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 308, in validate_runs
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        expected_retcode,
+        ^^^^^^^^^^^^^^^^^
+        actual.returncode,
+        ^^^^^^^^^^^^^^^^^^
+        msg=build_error_message(expected_retcode, expected_stdout, actual, exe),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: Incorrect behavior in /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_13/valid/implicit_casts/convert_for_assignment
+* Bad return code: expected 0 and got 1
+
+======================================================================
+FAIL: test_valid/libraries/use_arg_after_fun_call_client (test_framework.basic.TestChapter13.test_valid/libraries/use_arg_after_fun_call_client)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 612, in test_client
+    self.compile_client_and_run(program)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 455, in compile_client_and_run
+    self.library_test_helper(client_path, [lib_path])
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 448, in library_test_helper
+    self.validate_runs(validation_key, result)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 308, in validate_runs
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        expected_retcode,
+        ^^^^^^^^^^^^^^^^^
+        actual.returncode,
+        ^^^^^^^^^^^^^^^^^^
+        msg=build_error_message(expected_retcode, expected_stdout, actual, exe),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: Incorrect behavior in /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_13/valid/libraries/use_arg_after_fun_call_client
+* Bad return code: expected 4 and got 0
+
+======================================================================
+FAIL: test_valid/special_values/subnormal_not_zero (test_framework.basic.TestChapter13.test_valid/special_values/subnormal_not_zero)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 603, in test_run
+    self.compile_and_run(program)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/test_framework/basic.py", line 385, in compile_and_run
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        compile_result.returncode,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+        0,
+        ^^
+        msg=f"compilation of {source_file} failed with error:\n{compile_result.stderr}",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: compilation of /Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_13/valid/special_values/subnormal_not_zero.c failed with error:
+assembler failed:
+/Users/abdulrahmansibahi/Documents/c_compiler_book/writing-a-c-compiler-tests/tests/chapter_13/valid/special_values/subnormal_not_zero.s:10:8: error: invalid operand for instruction
+ movsd $0, -16(%rbp)
+       ^~
+
+
+
+----------------------------------------------------------------------
+Ran 476 tests in 229.677s
+
+FAILED (failures=12)

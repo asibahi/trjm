@@ -311,7 +311,7 @@ impl ast::Stmt {
             Self::Switch { ctrl, body, label: Some(label), cases } => {
                 let dst = make_ir_variable(
                     "swch",
-                    ctrl.ret.clone().expect("switch type must be known"),
+                    ctrl.type_.clone().expect("switch type must be known"),
                     symbols,
                 );
 
@@ -416,7 +416,7 @@ impl ast::Stmt {
 }
 impl ast::TypedExpr {
     fn to_ir(&self, instrs: &mut Vec<Instr>, symbols: &mut Namespace<TypeCtx>) -> Value {
-        self.expr.to_ir(instrs, symbols, self.ret.as_ref().expect("expr type is known"))
+        self.expr.to_ir(instrs, symbols, self.type_.as_ref().expect("expr type is known"))
     }
 }
 
@@ -443,7 +443,7 @@ impl ast::Expr {
 
                 let dst = make_ir_variable(
                     "unop",
-                    expr.ret.clone().expect("unop type must be known"),
+                    expr.type_.clone().expect("unop type must be known"),
                     symbols,
                 );
 
@@ -475,11 +475,11 @@ impl ast::Expr {
                     )
                 };
 
-                let rhs = if place.ret == value.ret {
+                let rhs = if place.type_ == value.type_ {
                     value.to_ir(instrs, symbols)
                 } else {
-                    ast::Expr::Cast { target: place.ret.clone().unwrap(), inner: value.clone() }
-                        .typed(place.ret.clone().unwrap())
+                    ast::Expr::Cast { target: place.type_.clone().unwrap(), inner: value.clone() }
+                        .typed(place.type_.clone().unwrap())
                         .to_ir(instrs, symbols)
                 };
 
@@ -509,7 +509,7 @@ impl ast::Expr {
 
                 let result = make_ir_variable(
                     "ter",
-                    then.ret.clone().expect("ternary type should be known"),
+                    then.type_.clone().expect("ternary type should be known"),
                     symbols,
                 );
 
@@ -544,7 +544,7 @@ impl ast::Expr {
 
             Self::Cast { target, inner } => {
                 let src = inner.to_ir(instrs, symbols);
-                let src_ty = inner.ret.as_ref().expect("inner expr type should be known");
+                let src_ty = inner.type_.as_ref().expect("inner expr type should be known");
                 if target == src_ty {
                     return src;
                 }
@@ -553,10 +553,10 @@ impl ast::Expr {
                 let dst = dst_var.clone();
 
                 let cast_instr = match (target, src_ty) {
-                    (Type::Int | Type::Long, Type::Double) => Instr::IntToDouble { src, dst },
-                    (Type::UInt | Type::ULong, Type::Double) => Instr::UIntToDouble { src, dst },
-                    (Type::Double, Type::Int | Type::Long) => Instr::DoubleToInt { src, dst },
-                    (Type::Double, Type::UInt | Type::ULong) => Instr::DoubleToUInt { src, dst },
+                    (Type::Int | Type::Long, Type::Double) => Instr::DoubleToInt { src, dst },
+                    (Type::UInt | Type::ULong, Type::Double) => Instr::DoubleToUInt { src, dst },
+                    (Type::Double, Type::Int | Type::Long) => Instr::IntToDouble { src, dst },
+                    (Type::Double, Type::UInt | Type::ULong) => Instr::UIntToDouble { src, dst },
 
                     _ => match target.size().cmp(&src_ty.size()) {
                         Ordering::Equal => Instr::Copy { src, dst },
@@ -602,7 +602,7 @@ fn postfix_prefix_instrs(
     }
 
     let op = op.to_ir();
-    let one = match expr.ret.as_ref().expect("operand type info must be known") {
+    let one = match expr.type_.as_ref().expect("operand type info must be known") {
         Type::Int => Const::Int(1),
         Type::Long => Const::Long(1),
         Type::UInt => Const::UInt(1),
@@ -738,7 +738,7 @@ impl ast::VarDecl {
             let Some(TypeCtx { type_: dst_type, .. }) = symbols.get(&self.name) else {
                 unreachable!()
             };
-            let v = if *dst_type == e.ret.clone().unwrap() {
+            let v = if *dst_type == e.type_.clone().unwrap() {
                 e.to_ir(instrs, symbols)
             } else {
                 ast::Expr::Cast { target: dst_type.clone(), inner: Box::new(e.clone()) }

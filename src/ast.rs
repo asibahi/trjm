@@ -1272,7 +1272,7 @@ impl Stmt {
             Self::Switch { ctrl, body, label, .. } => {
                 let switch_type = ctrl
                     .clone()
-                    .ret
+                    .type_
                     .ok_or(anyhow::anyhow!("switch type must be kbown at this point"))?;
 
                 let mut switchctx = FxHashSet::default();
@@ -1398,7 +1398,7 @@ impl Stmt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedExpr {
     pub expr: Expr,
-    pub ret: Option<Type>,
+    pub type_: Option<Type>,
 }
 impl Display for TypedExpr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -1407,7 +1407,7 @@ impl Display for TypedExpr {
 }
 impl TypedExpr {
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {
-        Ok(Self { expr: self.expr.resolve_identifiers(map)?, ret: self.ret })
+        Ok(Self { expr: self.expr.resolve_identifiers(map)?, type_: self.type_ })
     }
 
     fn type_check(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
@@ -1415,7 +1415,7 @@ impl TypedExpr {
     }
 
     fn cast_to_type(self, target: Type) -> Self {
-        if self.ret == Some(target.clone()) {
+        if self.type_ == Some(target.clone()) {
             return self;
         }
         Expr::Cast { target: target.clone(), inner: Box::new(self) }.typed(target)
@@ -1459,10 +1459,10 @@ impl Display for Expr {
 }
 impl Expr {
     pub fn dummy_typed(self) -> TypedExpr {
-        TypedExpr { expr: self, ret: None }
+        TypedExpr { expr: self, type_: None }
     }
     pub fn typed(self, ty: Type) -> TypedExpr {
-        TypedExpr { expr: self, ret: Some(ty) }
+        TypedExpr { expr: self, type_: Some(ty) }
     }
 
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {
@@ -1573,11 +1573,11 @@ impl Expr {
                 let expr = Box::new(expr.type_check(symbols)?);
 
                 let ty = match op {
-                    UnaryOp::Complement if expr.ret == Some(Type::Double) => {
+                    UnaryOp::Complement if expr.type_ == Some(Type::Double) => {
                         anyhow::bail!("cannot complement a double")
                     }
                     UnaryOp::Not => Type::Int,
-                    _ => expr.clone().ret.expect("unary type should be known"),
+                    _ => expr.clone().type_.expect("unary type should be known"),
                 };
 
                 Ok(Self::Unary(op, expr).typed(ty))
@@ -1592,7 +1592,7 @@ impl Expr {
                         return Ok(Self::Binary { op, lhs, rhs }.typed(Type::Int));
                     }
                     BinaryOp::Reminder
-                        if lhs.ret == Some(Type::Double) || rhs.ret == Some(Type::Double) =>
+                        if lhs.type_ == Some(Type::Double) || rhs.type_ == Some(Type::Double) =>
                     {
                         anyhow::bail!("cannot modulo a double")
                     }
@@ -1601,8 +1601,8 @@ impl Expr {
 
                 let common = lhs
                     .clone()
-                    .ret
-                    .and_then(|lht| rhs.clone().ret.map(|rht| lht.get_common_type(rht)))
+                    .type_
+                    .and_then(|lht| rhs.clone().type_.map(|rht| lht.get_common_type(rht)))
                     .expect("binary operand type should be known at this point");
 
                 let lhs_cast = Box::new(lhs.clone().cast_to_type(common.clone()));
@@ -1620,7 +1620,7 @@ impl Expr {
                     | BinaryOp::BitOr
                     | BinaryOp::BitXor => ret.typed(common),
 
-                    BinaryOp::LeftShift | BinaryOp::RightShift => ret.typed(lhs.ret.unwrap()),
+                    BinaryOp::LeftShift | BinaryOp::RightShift => ret.typed(lhs.type_.unwrap()),
 
                     BinaryOp::Equal
                     | BinaryOp::NotEqual
@@ -1638,7 +1638,7 @@ impl Expr {
                 let rhs = rhs.type_check(symbols)?;
 
                 let left_type =
-                    lhs.clone().ret.expect("assignee type should be known at this point");
+                    lhs.clone().type_.expect("assignee type should be known at this point");
                 let rhs = Box::new(rhs.cast_to_type(left_type.clone()));
 
                 Ok(Self::Assignemnt(lhs, rhs).typed(left_type))
@@ -1656,12 +1656,12 @@ impl Expr {
                 }
 
                 let left_type =
-                    lhs.clone().ret.expect("assignee type should be known at this point");
+                    lhs.clone().type_.expect("assignee type should be known at this point");
 
                 let common = lhs
                     .clone()
-                    .ret
-                    .and_then(|lht| rhs.clone().ret.map(|rht| lht.get_common_type(rht)))
+                    .type_
+                    .and_then(|lht| rhs.clone().type_.map(|rht| lht.get_common_type(rht)))
                     .expect("compound assignment operand type should be known at this point");
 
                 let lhs_cast = Box::new(lhs.clone().cast_to_type(common.clone()));
@@ -1712,8 +1712,8 @@ impl Expr {
 
                 let common = then
                     .clone()
-                    .ret
-                    .and_then(|lht| else_.clone().ret.map(|rht| lht.get_common_type(rht)))
+                    .type_
+                    .and_then(|lht| else_.clone().type_.map(|rht| lht.get_common_type(rht)))
                     .expect("ternary operand type should be known at this point");
 
                 let then = Box::new(then.cast_to_type(common.clone()));

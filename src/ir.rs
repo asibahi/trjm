@@ -441,11 +441,7 @@ impl ast::Expr {
             Self::Unary(unary_op, expr) => {
                 let src = expr.to_ir(instrs, symbols);
 
-                let dst = make_ir_variable(
-                    "unop",
-                    expr.type_.clone().expect("unop type must be known"),
-                    symbols,
-                );
+                let dst = make_ir_variable("unop", expr_type.clone(), symbols);
 
                 let op = unary_op.to_ir();
 

@@ -1755,7 +1755,7 @@ impl Display for Const {
             Self::ULong(i) => write!(f, "{i}"),
 
             // maybe?
-            Self::Double(i) => write!(f, "{i}"),
+            Self::Double(i) => write!(f, "{i:.3}"),
         }
     }
 }

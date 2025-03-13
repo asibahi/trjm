@@ -166,6 +166,9 @@ impl Type {
             Self::Double => StaticInit::Double(0.0),
         }
     }
+    fn is_intish(&self) -> bool {
+        matches!(self, Type::Int | Type::Long | Type::UInt | Type::ULong)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1304,7 +1307,7 @@ impl Stmt {
                     switch_ctx.ok_or(anyhow::anyhow!("default outside of a switch"))?;
 
                 if !switch_ctx.insert(None) {
-                    anyhow::bail!("cdefault ase already exists");
+                    anyhow::bail!("cdefault case already exists");
                 };
 
                 let body = Box::new(body.resolve_switch_statements(Some(switch_ctx), switch_type)?);
@@ -1374,17 +1377,32 @@ impl Stmt {
             Self::Label(label, stmt) => {
                 Self::Label(label, Box::new(stmt.type_check(symbols, enclosing_func_ret)?))
             }
-            Self::Switch { ctrl, body, label, cases } => Self::Switch {
-                ctrl: ctrl.type_check(symbols)?,
-                body: Box::new(body.type_check(symbols, enclosing_func_ret)?),
-                label,
-                cases,
-            },
-            Self::Case { cnst, body, label } => Self::Case {
-                cnst: cnst.type_check(symbols)?,
-                body: Box::new(body.type_check(symbols, enclosing_func_ret)?),
-                label,
-            },
+            Self::Switch { ctrl, body, label, cases } => {
+                let ctrl = ctrl.type_check(symbols)?;
+                anyhow::ensure!(matches!(
+                    ctrl.clone().type_,
+                    Some(Type::Int | Type::UInt | Type::Long | Type::ULong)
+                ));
+
+                Self::Switch {
+                    ctrl,
+                    body: Box::new(body.type_check(symbols, enclosing_func_ret)?),
+                    label,
+                    cases,
+                }
+            }
+            Self::Case { cnst, body, label } => {
+                let cnst = cnst.type_check(symbols)?;
+                anyhow::ensure!(matches!(
+                    cnst.clone().type_,
+                    Some(Type::Int | Type::UInt | Type::Long | Type::ULong)
+                ));
+                Self::Case {
+                    cnst,
+                    body: Box::new(body.type_check(symbols, enclosing_func_ret)?),
+                    label,
+                }
+            }
             Self::Default { body, label } => Self::Default {
                 body: Box::new(body.type_check(symbols, enclosing_func_ret)?),
                 label,
@@ -1607,19 +1625,32 @@ impl Expr {
                 let lhs_cast = Box::new(lhs.clone().cast_to_type(common.clone()));
                 let rhs = Box::new(rhs.cast_to_type(common.clone()));
 
-                let ret = Self::Binary { op, lhs: lhs_cast, rhs };
+                let ret = Self::Binary { op, lhs: lhs_cast, rhs: rhs.clone() };
 
                 Ok(match op {
                     BinaryOp::Add
                     | BinaryOp::Subtract
                     | BinaryOp::Multiply
                     | BinaryOp::Divide
-                    | BinaryOp::Reminder
-                    | BinaryOp::BitAnd
-                    | BinaryOp::BitOr
-                    | BinaryOp::BitXor => ret.typed(common),
+                    | BinaryOp::Reminder => ret.typed(common),
+                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
+                        if rhs.type_.as_ref().is_some_and(Type::is_intish) =>
+                    {
+                        ret.typed(common)
+                    }
 
-                    BinaryOp::LeftShift | BinaryOp::RightShift => ret.typed(lhs.type_.unwrap()),
+                    BinaryOp::LeftShift | BinaryOp::RightShift
+                        if rhs.type_.as_ref().is_some_and(Type::is_intish) =>
+                    {
+                        ret.typed(lhs.type_.unwrap())
+                    }
+                    BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::LeftShift
+                    | BinaryOp::RightShift => {
+                        anyhow::bail!("cannot apply operation to a double")
+                    }
 
                     BinaryOp::Equal
                     | BinaryOp::NotEqual
@@ -1647,7 +1678,22 @@ impl Expr {
                 let lhs = Box::new(lhs.type_check(symbols)?);
                 let rhs = Box::new(rhs.type_check(symbols)?);
 
+                let common = lhs
+                    .clone()
+                    .type_
+                    .and_then(|lht| rhs.clone().type_.map(|rht| lht.get_common_type(rht)))
+                    .expect("compound assignment operand type should be known at this point");
+
                 match op {
+                    BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::LeftShift
+                    | BinaryOp::RightShift
+                        if !common.is_intish() =>
+                    {
+                        anyhow::bail!("can't operate those on a double")
+                    }
                     BinaryOp::And | BinaryOp::Or => {
                         return Ok(Self::CompoundAssignment { op, lhs, rhs }.typed(Type::Int));
                     }
@@ -1657,13 +1703,12 @@ impl Expr {
                 let left_type =
                     lhs.clone().type_.expect("assignee type should be known at this point");
 
-                let common = lhs
-                    .clone()
-                    .type_
-                    .and_then(|lht| rhs.clone().type_.map(|rht| lht.get_common_type(rht)))
-                    .expect("compound assignment operand type should be known at this point");
+                let lhs_cast = if matches!(op, BinaryOp::RightShift | BinaryOp::LeftShift) {
+                    lhs.clone()
+                } else {
+                    Box::new(lhs.clone().cast_to_type(common.clone()))
+                };
 
-                let lhs_cast = Box::new(lhs.clone().cast_to_type(common.clone()));
                 let rhs = Box::new(rhs.cast_to_type(common.clone()));
 
                 let ret = if matches!(lhs_cast.expr, Expr::Cast { .. }) {

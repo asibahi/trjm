@@ -270,6 +270,7 @@ fn fixup_instruction(instrs: &mut Vec<Instr>) {
                 | Operator::Xor
                 // maybe ?
                 | Operator::Sar
+                | Operator::Shr
                 | Operator::Shl),
                 ty,
                 src @ Imm(i),
@@ -308,7 +309,7 @@ fn fixup_instruction(instrs: &mut Vec<Instr>) {
                 ]);
             }
             Instr::Binary(
-                opp @ (Operator::Shl | Operator::Sar),
+                opp @ (Operator::Shl | Operator::Sar| Operator::Shr),
                 ty,
                 src,
                 dst @ (Stack(_) | Data(_)),
@@ -725,6 +726,7 @@ pub enum CondCode {
     LE,
     G,
     GE,
+    P,
 }
 use CondCode::*;
 impl CondCode {
@@ -740,6 +742,7 @@ impl CondCode {
             Self::LE => "le",
             Self::G => "g",
             Self::GE => "ge",
+            Self::P => "p",
         }
     }
 }
@@ -950,6 +953,7 @@ impl ir::Instr {
                 let Some(BSymbol::Obj { type_: dst_ty, .. }) = symbols.get(&dst.0) else {
                     unreachable!()
                 };
+                let nan = eco_format!("nan_{}", GEN.fetch_add(1, Relaxed));
                 let dst = dst.to_asm();
                 match src_ty {
                     Longword | Quadword => vec![
@@ -961,7 +965,9 @@ impl ir::Instr {
                         Instr::Binary(Operator::Xor, Doubleword, Reg(XMM14, 8), Reg(XMM14, 8)),
                         Instr::Cmp(src_ty, src.to_asm(consts), Reg(XMM14, 8)),
                         Instr::Mov(*dst_ty, Imm(0), dst.clone()),
+                        Instr::JmpCC(P, nan.clone()),
                         Instr::SetCC(E, dst),
+                        Instr::Label(nan),
                     ],
                 }
             }
@@ -1058,12 +1064,34 @@ impl ir::Instr {
                             unreachable!()
                         };
                         let dst = dst.to_asm();
+                        let counter = GEN.fetch_add(1, Relaxed);
+                        let nan_label = eco_format!("nan_{}", counter);
+                        let ian_label = eco_format!("ian_{}", counter);
 
-                        vec![
-                            Instr::Cmp(src_ty, rhs.to_asm(consts), lhs.to_asm(consts)),
-                            Instr::Mov(*dst_ty, Imm(0), dst.clone()),
-                            Instr::SetCC(op.to_asm(signed).unwrap_right(), dst),
-                        ]
+                        match src_ty {
+                            Doubleword if matches!(op, ir::BinOp::NotEqual) => vec![
+                                Instr::Cmp(src_ty, rhs.to_asm(consts), lhs.to_asm(consts)),
+                                Instr::Mov(*dst_ty, Imm(0), dst.clone()),
+                                Instr::JmpCC(P, nan_label.clone()),
+                                Instr::SetCC(NE, dst.clone()),
+                                Instr::Jmp(ian_label.clone()),
+                                Instr::Label(nan_label),
+                                Instr::SetCC(E, dst),
+                                Instr::Label(ian_label),
+                            ],
+                            Doubleword => vec![
+                                Instr::Cmp(src_ty, rhs.to_asm(consts), lhs.to_asm(consts)),
+                                Instr::Mov(*dst_ty, Imm(0), dst.clone()),
+                                Instr::JmpCC(P, nan_label.clone()),
+                                Instr::SetCC(op.to_asm(signed).unwrap_right(), dst.clone()),
+                                Instr::Label(nan_label),
+                            ],
+                            _ => vec![
+                                Instr::Cmp(src_ty, rhs.to_asm(consts), lhs.to_asm(consts)),
+                                Instr::Mov(*dst_ty, Imm(0), dst.clone()),
+                                Instr::SetCC(op.to_asm(signed).unwrap_right(), dst),
+                            ],
+                        }
                     }
                 }
             }
@@ -1074,6 +1102,10 @@ impl ir::Instr {
             Self::Jump { target } => vec![Instr::Jmp(target.clone())],
             Self::JumpIfZero { cond, target } => {
                 let (cond_ty, _) = cond.to_asm_type(symbols);
+
+                let counter = GEN.fetch_add(1, Relaxed);
+                let nan_label = eco_format!("nan_{}", counter);
+
                 match cond_ty {
                     Longword | Quadword => vec![
                         Instr::Cmp(cond_ty, Imm(0), cond.to_asm(consts)),
@@ -1082,21 +1114,34 @@ impl ir::Instr {
                     Doubleword => vec![
                         Instr::Binary(Operator::Xor, Doubleword, Reg(XMM15, 8), Reg(XMM15, 8)),
                         Instr::Cmp(Doubleword, cond.to_asm(consts), Reg(XMM15, 8)),
+                        Instr::JmpCC(P, nan_label.clone()),
                         Instr::JmpCC(E, target.clone()),
+                        Instr::Label(nan_label),
                     ],
                 }
             }
             Self::JumpIfNotZero { cond, target } => {
                 let (cond_ty, _) = cond.to_asm_type(symbols);
+
+                let counter = GEN.fetch_add(1, Relaxed);
+                let nan_label = eco_format!("nan_{}", counter);
+                let ian_label = eco_format!("ian_{}", counter);
+
                 match cond_ty {
                     Longword | Quadword => vec![
                         Instr::Cmp(cond_ty, Imm(0), cond.to_asm(consts)),
                         Instr::JmpCC(NE, target.clone()),
                     ],
+                    // todo for NaN
                     Doubleword => vec![
                         Instr::Binary(Operator::Xor, Doubleword, Reg(XMM15, 8), Reg(XMM15, 8)),
                         Instr::Cmp(Doubleword, cond.to_asm(consts), Reg(XMM15, 8)),
+                        Instr::JmpCC(P, nan_label.clone()),
                         Instr::JmpCC(NE, target.clone()),
+                        Instr::Jmp(ian_label.clone()),
+                        Instr::Label(nan_label),
+                        Instr::JmpCC(E, target.clone()),
+                        Instr::Label(ian_label),
                     ],
                 }
             }
@@ -1240,7 +1285,8 @@ impl ir::BinOp {
             Self::BitOr => Left(Operator::Or),
             Self::BitXor => Left(Operator::Xor),
             Self::LeftShift => Left(Operator::Shl),
-            Self::RightShift => Left(Operator::Sar),
+            Self::RightShift if signed => Left(Operator::Sar),
+            Self::RightShift => Left(Operator::Shr),
             Self::Divide => Left(Operator::DivDouble), // double division only
 
             Self::Reminder => {

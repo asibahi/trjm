@@ -163,7 +163,6 @@ impl Type {
             Self::ULong => StaticInit::ULong(0),
             Self::Func { .. } => unreachable!("function static value not a thing"),
 
-            // maybe? todo
             Self::Double => StaticInit::Double(0.0),
         }
     }
@@ -218,7 +217,7 @@ impl Display for StaticInit {
             Self::UInt(i) => write!(f, "long   {i}"),
             Self::ULong(i) => write!(f, "quad   {i}"),
 
-            Self::Double(i) => write!(f, "double  {i}"),
+            Self::Double(i) => write!(f, "quad   {}", i.to_bits()),
         }
     }
 }
@@ -1756,7 +1755,7 @@ impl Display for Const {
             Self::ULong(i) => write!(f, "{i}"),
 
             // maybe?
-            Self::Double(i) => write!(f, "{i}"),
+            Self::Double(i) => write!(f, "{i:.3}"),
         }
     }
 }

@@ -95,7 +95,6 @@ impl AsmType {
 }
 
 #[derive(Debug, Clone)]
-#[expect(dead_code)]
 pub enum TopLevel {
     Function { name: Ecow, instrs: Vec<Instr>, stack_size: i32, global: bool },
     StaticVariable { name: Ecow, global: bool, init: StaticInit, alignment: i32 },
@@ -135,7 +134,21 @@ impl TopLevel {
                 _ = writeln!(f, "_{name}:");
                 _ = writeln!(f, "\t.{init}");
             }
-            Self::StaticConstant { .. } => todo!(),
+            Self::StaticConstant { name, init, alignment } => {
+                match alignment {
+                    8 => _ = writeln!(f, "\t.literal8"),
+                    16 => _ = writeln!(f, "\t.literal16"),
+                    _ => unreachable!(),
+                }
+
+                _ = writeln!(f, "\t.balign {alignment}");
+                _ = writeln!(f, "_{name}:");
+                _ = writeln!(f, "\t.{init}");
+
+                if *alignment == 16 {
+                    _ = writeln!(f, "\t.quad   0");
+                }
+            }
         }
     }
 
@@ -172,180 +185,188 @@ impl TopLevel {
             let TopLevel::Function { instrs, .. } = self else {
                 break;
             };
-            let mut out = Vec::with_capacity(instrs.len());
-
-            for instr in std::mem::take(instrs) {
-                match instr {
-                    Instr::Mov(ty, Imm(0), dst @ Reg(..)) => {
-                        out.push(Instr::Binary(Operator::Xor, ty, dst.clone(), dst));
-                    }
-                    Instr::Mov(ty, src @ (Stack(_) | Data(_)), dst @ (Stack(_) | Data(_))) => {
-                        let reg = if ty == Doubleword { XMM15 } else { R10 };
-                        out.extend([
-                            Instr::Mov(ty, src, Reg(reg, ty.width())),
-                            Instr::Mov(ty, Reg(reg, ty.width()), dst),
-                        ]);
-                    }
-                    Instr::Mov(ty, src @ Imm(i), dst @ (Stack(_) | Data(_)))
-                        if i32::try_from(i).is_err() =>
-                    {
-                        let reg = if ty == Doubleword { XMM15 } else { R10 };
-                        out.extend([
-                            Instr::Mov(ty, src, Reg(reg, ty.width())),
-                            Instr::Mov(ty, Reg(reg, ty.width()), dst),
-                        ]);
-                    }
-                    Instr::Mov(Longword, Imm(i), dst) if i32::try_from(i).is_err() => {
-                        out.push(Instr::Mov(Longword, Imm(i64::from(i as i32)), dst));
-                    }
-                    Instr::Cmp(Doubleword, src,dst @ (Stack(_) | Data(_))) => {
-                        out.extend([
-                            Instr::Mov(Doubleword, dst, Reg(XMM15, 8)),
-                            Instr::Cmp(Doubleword, src, Reg(XMM15, 8))
-                        ]);
-                    }
-                    Instr::Cmp(ty, src @ Imm(i), dst)
-                        if i32::try_from(i).is_err() =>
-                    {
-                        out.extend([
-                            Instr::Mov(ty, src, Reg(R10, ty.width())),
-                            Instr::Cmp(ty, Reg(R10, ty.width()), dst),
-                        ]);
-                    }
-                    Instr::Cmp(ty, src @ (Stack(_) | Data(_)), dst @ (Stack(_) | Data(_))) => {
-                        out.extend([
-                            Instr::Mov(ty, src, Reg(R10, ty.width())),
-                            Instr::Cmp(ty, Reg(R10, ty.width()), dst),
-                        ]);
-                    }
-                    Instr::Cmp(ty, src, dst @ Imm(_)) => {
-                        out.extend([
-                            Instr::Mov(ty, dst, Reg(R11, ty.width())),
-                            Instr::Cmp(ty, src, Reg(R11, ty.width())),
-                        ]);
-                    }
-                    Instr::Push(src @ Imm(i)) if i32::try_from(i).is_err() => {
-                        out.extend([
-                            Instr::Mov(Quadword, src, Reg(R10, 8)),
-                            Instr::Push(Reg(R10, 8)),
-                        ]);
-                    }
-                    Instr::Div(ty, v @ Imm(_)) => {
-                        out.extend([
-                            Instr::Mov(ty, v, Reg(R10, ty.width())),
-                            Instr::Div(ty, Reg(R10, ty.width())),
-                        ]);
-                    }
-                    Instr::Idiv(ty, v @ Imm(_)) => {
-                        out.extend([
-                            Instr::Mov(ty, v, Reg(R10, ty.width())),
-                            Instr::Idiv(ty, Reg(R10, ty.width())),
-                        ]);
-                    }
-                    Instr::Binary(
-                        opp @ (Operator::Add
-                        | Operator::Sub
-                        | Operator::Mul
-                        | Operator::And
-                        | Operator::Or
-                        | Operator::Xor
-                        // maybe ?
-                        | Operator::Shr
-                        | Operator::Shl),
-                        ty,
-                        src @ Imm(i),
-                        dst,
-                    ) if i32::try_from(i).is_err() => out.extend([
-                        Instr::Mov(ty, src, Reg(R10, ty.width())),
-                        Instr::Binary(opp, ty, Reg(R10, ty.width()), dst),
-                    ]),
-                    Instr::Binary(
-                        opp @ (Operator::Add
-                        | Operator::Sub
-                        | Operator::And
-                        | Operator::Or
-                        | Operator::Xor),
-                        ty,
-                        src @ (Stack(_) | Data(_)),
-                        dst @ (Stack(_) | Data(_)),
-                    ) => {
-                        let reg = if ty == Doubleword { XMM15 } else { R10 };
-                        out.extend([
-                            Instr::Mov(ty, src, Reg(reg, ty.width())),
-                            Instr::Binary(opp, ty, Reg(reg, ty.width()), dst),
-                        ])
-                    },
-                    Instr::Binary(Operator::Mul, ty, src, dst @ (Stack(_) | Data(_))) => {
-                        let reg = if ty == Doubleword { XMM14 } else { R11 };
-
-                        out.extend([
-                            Instr::Mov(ty, dst.clone(), Reg(reg, ty.width())),
-                            Instr::Binary(Operator::Mul, ty, src, Reg(reg, ty.width())),
-                            Instr::Mov(ty, Reg(reg, ty.width()), dst),
-                        ]);
-                    }
-                    Instr::Binary(
-                        opp @ (Operator::Shl | Operator::Shr),
-                        ty,
-                        src,
-                        dst @ (Stack(_) | Data(_)),
-                    ) if src != Reg(CX, 1) => {
-                        out.extend([
-                            Instr::Mov(ty, src, Reg(CX, ty.width())),
-                            Instr::Binary(opp, ty, Reg(CX, 1), dst),
-                        ]);
-                    }
-                    Instr::Movsx(src @ Imm(_), dst) => {
-                        // maybe it is better to split it in two passes?
-                        out.extend([
-                            Instr::Mov(Longword, src, Reg(R10, 4)),
-                            Instr::Movsx(Reg(R10, 4), dst),
-                        ]);
-                    }
-                    Instr::Movsx(src, dst @ (Stack(_) | Data(_)   )) => {
-                        out.extend([
-                            Instr::Movsx(src, Reg(R11, 8)),
-                            Instr::Mov(Quadword, Reg(R11, 8), dst),
-                        ]);
-                    }
-                    Instr::MovZeroExtend(src,dst @ Reg(_,_)) => {
-                        out.push(Instr::Mov(Longword, src, dst));
-                    }
-                    Instr::MovZeroExtend(src,dst @ (Stack(_) | Data(_)) ) => {
-                        out.extend([
-                            Instr::Mov(Longword, src, Reg(R11, 4)),
-                            Instr::Mov(Quadword, Reg(R11, 8), dst),
-                            ]);
-                    }
-
-                    Instr::Cvttsd2si(ty, src,dst @ ( Stack(_) | Data(_)) ) =>
-                    {
-                        out.extend([
-                            Instr::Cvttsd2si(ty, src, Reg(R11,ty.width())),
-                            Instr::Mov(ty, Reg(R11, ty.width()), dst)
-                        ]);
-                    }
-
-                    Instr::Cvtsi2sd(ty, src @ Imm(_),dst ) => {
-                        out.extend([
-                            Instr::Mov(ty, src, Reg(R10, ty.width())),
-                            Instr::Cvtsi2sd(ty, Reg(R10, ty.width()), dst)
-                        ]);
-                    }
-                    Instr::Cvtsi2sd(ty, src,dst @(Stack(_) | Data(_)) ) =>{
-                        out.extend([
-                            Instr::Cvtsi2sd(ty, src, Reg(XMM15, 8)),
-                            Instr::Mov(ty , Reg(XMM15, 8), dst),
-                        ]);
-                    }
-
-                    other => out.push(other),
-                }
-            }
-
-            *instrs = out;
+            fixup_instruction(instrs);
         }
     }
+}
+
+fn fixup_instruction(instrs: &mut Vec<Instr>) {
+    let mut out = Vec::with_capacity(instrs.len());
+
+    for instr in std::mem::take(instrs) {
+        match instr {
+            Instr::Mov(ty, Imm(0), dst @ Reg(..)) => {
+                out.push(Instr::Binary(Operator::Xor, ty, dst.clone(), dst));
+            }
+            Instr::Mov(ty, src @ (Stack(_) | Data(_)), dst @ (Stack(_) | Data(_))) => {
+                let reg = if ty == Doubleword { XMM15 } else { R10 };
+                out.extend([
+                    Instr::Mov(ty, src, Reg(reg, ty.width())),
+                    Instr::Mov(ty, Reg(reg, ty.width()), dst),
+                ]);
+            }
+            Instr::Mov(ty, src @ Imm(i), dst @ (Stack(_) | Data(_)))
+                if i32::try_from(i).is_err() =>
+            {
+                let reg = if ty == Doubleword { XMM15 } else { R10 };
+                out.extend([
+                    Instr::Mov(ty, src, Reg(reg, ty.width())),
+                    Instr::Mov(ty, Reg(reg, ty.width()), dst),
+                ]);
+            }
+            Instr::Mov(Longword, Imm(i), dst) if i32::try_from(i).is_err() => {
+                out.push(Instr::Mov(Longword, Imm(i64::from(i as i32)), dst));
+            }
+            Instr::Cmp(Doubleword, src,dst @ (Stack(_) | Data(_))) => {
+                out.extend([
+                    Instr::Mov(Doubleword, dst, Reg(XMM15, 8)),
+                    Instr::Cmp(Doubleword, src, Reg(XMM15, 8))
+                ]);
+            }
+            Instr::Cmp(ty, src @ Imm(i), dst)
+                if i32::try_from(i).is_err() =>
+            {
+                out.extend([
+                    Instr::Mov(ty, src, Reg(R10, ty.width())),
+                    Instr::Cmp(ty, Reg(R10, ty.width()), dst),
+                ]);
+            }
+            Instr::Cmp(ty, src @ (Stack(_) | Data(_)), dst @ (Stack(_) | Data(_))) => {
+                out.extend([
+                    Instr::Mov(ty, src, Reg(R10, ty.width())),
+                    Instr::Cmp(ty, Reg(R10, ty.width()), dst),
+                ]);
+            }
+            Instr::Cmp(ty, src, dst @ Imm(_)) => {
+                out.extend([
+                    Instr::Mov(ty, dst, Reg(R11, ty.width())),
+                    Instr::Cmp(ty, src, Reg(R11, ty.width())),
+                ]);
+            }
+            Instr::Push(src @ Imm(i)) if i32::try_from(i).is_err() => {
+                out.extend([
+                    Instr::Mov(Quadword, src, Reg(R10, 8)),
+                    Instr::Push(Reg(R10, 8)),
+                ]);
+            }
+            Instr::Div(ty, v @ Imm(_)) => {
+                out.extend([
+                    Instr::Mov(ty, v, Reg(R10, ty.width())),
+                    Instr::Div(ty, Reg(R10, ty.width())),
+                ]);
+            }
+            Instr::Idiv(ty, v @ Imm(_)) => {
+                out.extend([
+                    Instr::Mov(ty, v, Reg(R10, ty.width())),
+                    Instr::Idiv(ty, Reg(R10, ty.width())),
+                ]);
+            }
+            Instr::Binary(
+                opp @ (Operator::Add
+                | Operator::Sub
+                | Operator::Mul
+                | Operator::And
+                | Operator::Or
+                | Operator::Xor
+                // maybe ?
+                | Operator::Sar
+                | Operator::Shl),
+                ty,
+                src @ Imm(i),
+                dst,
+            ) if i32::try_from(i).is_err() => out.extend([
+                Instr::Mov(ty, src, Reg(R10, ty.width())),
+                Instr::Binary(opp, ty, Reg(R10, ty.width()), dst),
+            ]),
+            Instr::Binary(
+                opp @ (Operator::Add
+                | Operator::Sub
+                | Operator::DivDouble
+                | Operator::And
+                | Operator::Or
+                | Operator::Xor),
+                ty,
+                src @ (Stack(_) | Data(_)),
+                dst @ (Stack(_) | Data(_)),
+            ) => {
+                let reg = if ty == Doubleword { XMM15 } else { R10 };
+                let re2 = if ty == Doubleword { XMM14 } else { R11 };
+                out.extend([
+                    Instr::Mov(ty, src, Reg(reg, ty.width())),
+                    Instr::Mov(ty, dst.clone(), Reg(re2, ty.width())),
+                    Instr::Binary(opp, ty, Reg(reg, ty.width()), Reg(re2, ty.width())),
+                    Instr::Mov(ty, Reg(re2, ty.width()), dst),
+                ])
+            },
+            Instr::Binary(Operator::Mul, ty, src, dst @ (Stack(_) | Data(_))) => {
+                let reg = if ty == Doubleword { XMM14 } else { R11 };
+
+                out.extend([
+                    Instr::Mov(ty, dst.clone(), Reg(reg, ty.width())),
+                    Instr::Binary(Operator::Mul, ty, src, Reg(reg, ty.width())),
+                    Instr::Mov(ty, Reg(reg, ty.width()), dst),
+                ]);
+            }
+            Instr::Binary(
+                opp @ (Operator::Shl | Operator::Sar),
+                ty,
+                src,
+                dst @ (Stack(_) | Data(_)),
+            ) if src != Reg(CX, 1) => {
+                out.extend([
+                    Instr::Mov(ty, src, Reg(CX, ty.width())),
+                    Instr::Binary(opp, ty, Reg(CX, 1), dst),
+                ]);
+            }
+            Instr::Movsx(src @ Imm(_), dst) => {
+                // maybe it is better to split it in two passes?
+                out.extend([
+                    Instr::Mov(Longword, src, Reg(R10, 4)),
+                    Instr::Movsx(Reg(R10, 4), dst),
+                ]);
+            }
+            Instr::Movsx(src, dst @ (Stack(_) | Data(_)   )) => {
+                out.extend([
+                    Instr::Movsx(src, Reg(R11, 8)),
+                    Instr::Mov(Quadword, Reg(R11, 8), dst),
+                ]);
+            }
+            Instr::MovZeroExtend(src,dst @ Reg(_,_)) => {
+                out.push(Instr::Mov(Longword, src, dst.align_width(Longword)));
+            }
+            Instr::MovZeroExtend(src,dst @ (Stack(_) | Data(_)) ) => {
+                out.extend([
+                    Instr::Mov(Longword, src, Reg(R11, 4)),
+                    Instr::Mov(Quadword, Reg(R11, 8), dst),
+                    ]);
+            }
+
+            Instr::Cvttsd2si(ty, src,dst @ ( Stack(_) | Data(_)) ) =>
+            {
+                out.extend([
+                    Instr::Cvttsd2si(ty, src, Reg(R11,ty.width())),
+                    Instr::Mov(ty, Reg(R11, ty.width()), dst)
+                ]);
+            }
+
+            Instr::Cvtsi2sd(ty, src @ Imm(_),dst ) => {
+                out.extend([
+                    Instr::Mov(ty, src, Reg(R10, ty.width())),
+                    Instr::Cvtsi2sd(ty, Reg(R10, ty.width()), dst)
+                ]);
+            }
+            Instr::Cvtsi2sd(ty, src,dst @(Stack(_) | Data(_)) ) =>{
+                out.extend([
+                    Instr::Cvtsi2sd(ty, src, Reg(XMM15, 8)),
+                    Instr::Mov(Doubleword , Reg(XMM15, 8), dst),
+                ]);
+            }
+
+            other => out.push(other),
+        }
+    }
+
+    *instrs = out;
 }
 
 #[derive(Debug, Clone)]
@@ -376,10 +397,12 @@ impl Instr {
         match self {
             Self::Mov(ty, src, dst) => {
                 let ty = ty.emit_code();
+                let name = eco_format!("mov{ty}");
+
                 let src = src.emit_code() + ",";
                 let dst = dst.emit_code();
 
-                _ = writeln!(f, "\tmov{ty}    {src:<7} {dst}");
+                _ = writeln!(f, "\t{name:<7} {src:<7} {dst}");
             }
             Self::Unary(un_op, ty, operand) => {
                 let ty = ty.emit_code();
@@ -389,6 +412,22 @@ impl Instr {
 
                 _ = writeln!(f, "\t{uo:<7} {op}");
             }
+            Self::Binary(bin_op, ty, op1, op2) if *bin_op == Operator::Xor && *ty == Doubleword => {
+                let name = "xorpd";
+                let o1 = op1.emit_code() + ",";
+                let o2 = op2.emit_code();
+
+                _ = writeln!(f, "\t{name:<7} {o1:<7} {o2}");
+            }
+            Self::Binary(bin_op, ty, op1, op2) if *bin_op == Operator::Mul && *ty == Doubleword => {
+                let name = "mulsd";
+
+                let o1 = op1.emit_code() + ",";
+                let o2 = op2.emit_code();
+
+                _ = writeln!(f, "\t{name:<7} {o1:<7} {o2}");
+            }
+
             Self::Binary(bin_op, ty, op1, op2) => {
                 let ty = ty.emit_code();
                 let bo = bin_op.emit_code();
@@ -401,11 +440,14 @@ impl Instr {
             }
             Self::Idiv(ty, op) => {
                 let ty = ty.emit_code();
-                _ = writeln!(f, "\tidiv{ty}    {}", op.emit_code());
+                let name = eco_format!("idiv{ty}");
+                _ = writeln!(f, "\t{name:<7} {}", op.emit_code());
             }
             Self::Div(ty, op) => {
                 let ty = ty.emit_code();
-                _ = writeln!(f, "\tdiv{ty}    {}", op.emit_code());
+                let name = eco_format!("div{ty}");
+
+                _ = writeln!(f, "\t{name:<7} {}", op.emit_code());
             }
 
             Self::Cdq(ty) => match ty {
@@ -423,24 +465,30 @@ impl Instr {
                 _ = writeln!(f, "\tret");
             }
             Self::Cmp(ty, op1, op2) => {
+                let name = if *ty != Doubleword { "cmp" } else { "comi" };
                 let ty = ty.emit_code();
+                let name = eco_format!("{name}{ty}");
+
                 let op1 = op1.emit_code() + ",";
                 let op2 = op2.emit_code();
 
-                _ = writeln!(f, "\tcmp{ty}    {op1:<7} {op2}");
+                _ = writeln!(f, "\t{name:<7} {op1:<7} {op2}");
             }
             Self::SetCC(cond, op) => {
                 let cond = cond.emit_code();
+                let name = eco_format!("set{cond}");
                 let op = op.emit_code();
 
-                _ = writeln!(f, "\tset{cond:<4} {op}");
+                _ = writeln!(f, "\t{name:<7} {op}");
             }
             Self::Jmp(label) => _ = writeln!(f, "\tjmp     .L{label}"),
             Self::JmpCC(cond, label) => {
                 let cond = cond.emit_code();
-                _ = writeln!(f, "\tj{cond:<6} .L{label}");
+                let name = eco_format!("j{cond}");
+
+                _ = writeln!(f, "\t{name:<7} .L{label}");
             }
-            Self::Label(label) => _ = writeln!(f, "    .L{label}:"),
+            Self::Label(label) => _ = writeln!(f, "  .L{label}:"),
             Self::Movsx(src, dst) => {
                 let src = src.emit_code() + ",";
                 let dst = dst.emit_code();
@@ -449,7 +497,18 @@ impl Instr {
             }
             Self::MovZeroExtend(..) => unimplemented!(),
 
-            Self::Cvtsi2sd(..) | Self::Cvttsd2si(..) => todo!(),
+            Self::Cvtsi2sd(ty, src, dst) => {
+                let ty = ty.emit_code();
+                let src = src.emit_code() + ",";
+                let dst = dst.emit_code();
+                _ = writeln!(f, "\tcvtsi2sd{ty} {src:<6} {dst}")
+            }
+            Self::Cvttsd2si(ty, src, dst) => {
+                let ty = ty.emit_code();
+                let src = src.emit_code() + ",";
+                let dst = dst.emit_code();
+                _ = writeln!(f, "\tcvttsd2si{ty} {src:<5} {dst}")
+            }
         }
     }
 
@@ -573,8 +632,9 @@ pub enum Operator {
     And,
     Or,
     Xor,
-    Shr,
+    Sar,
     Shl,
+    Shr,
 }
 impl Operator {
     fn emit_code(self) -> &'static str {
@@ -587,9 +647,10 @@ impl Operator {
             Self::And => "and",
             Self::Or => "or",
             Self::Xor => "xor",
-            Self::Shr => "sar",
+            Self::Sar => "sar",
             Self::Shl => "shl",
 
+            Self::Shr => "shr",
             Self::DivDouble => "div",
         }
     }
@@ -685,8 +746,8 @@ impl CondCode {
 
 // =========
 
-const NEG_ZERO_NAME: &str = "_neg0";
-const UPPER_BOUND_NAME: &str = "_neg0";
+const NEG_ZERO_NAME: &str = "L_neg0";
+const UPPER_BOUND_NAME: &str = "L_upper_bound";
 const UPPER_BOUND_F64: f64 = 9223372036854775808.0;
 const UPPER_BOUND_INT: u64 = 9223372036854775808;
 
@@ -765,9 +826,9 @@ impl ir::TopLevel {
                         double_reg_args
                             .into_iter()
                             .zip(DOUBLE_ARG_REGISTER)
-                            .map(|(param, reg)| ((param, Doubleword), Reg(reg, 9))),
+                            .map(|(param, reg)| ((param, Doubleword), Reg(reg, 8))),
                     )
-                    .chain(stack_args.into_iter().zip((16..).map(Stack)))
+                    .chain(stack_args.into_iter().zip((16..).step_by(8).map(Stack)))
                     .map(|((param, arg_ty), reg)| {
                         Instr::Mov(arg_ty, reg.align_width(arg_ty), Pseudo(param.clone()))
                     })
@@ -810,7 +871,7 @@ impl ir::Instr {
             Self::IntToDouble { src, dst } => {
                 vec![Instr::Cvtsi2sd(src.to_asm_type(symbols).0, src.to_asm(consts), dst.to_asm())]
             }
-            Self::DoubleToInt { src, dst } => vec![Instr::Cvtsi2sd(
+            Self::DoubleToInt { src, dst } => vec![Instr::Cvttsd2si(
                 ir::Value::Var(dst.clone()).to_asm_type(symbols).0,
                 src.to_asm(consts),
                 dst.to_asm(),
@@ -842,7 +903,7 @@ impl ir::Instr {
                             Instr::Binary(Operator::And, Quadword, Imm(1), Reg(R10, 8)),
                             Instr::Binary(Operator::Or, Quadword, Reg(R10, 8), Reg(R11, 8)),
                             Instr::Cvtsi2sd(Quadword, Reg(R11, 8), dst.clone()),
-                            Instr::Binary(Operator::Add, Quadword, dst.clone(), dst),
+                            Instr::Binary(Operator::Add, Doubleword, dst.clone(), dst),
                             Instr::Label(label_2),
                         ]
                     }
@@ -854,7 +915,7 @@ impl ir::Instr {
                     Doubleword => unreachable!(),
                     Longword => vec![
                         Instr::Cvttsd2si(Quadword, src.to_asm(consts), Reg(R10, 8)),
-                        Instr::Mov(Longword, Reg(R10, 8), dst.to_asm()),
+                        Instr::Mov(Longword, Reg(R10, 4), dst.to_asm()),
                     ],
                     Quadword => {
                         let label_1 = eco_format!("_cvt_{}", GEN.fetch_add(1, Relaxed));
@@ -1079,10 +1140,13 @@ impl ir::Instr {
                     .chain(stack_args.into_iter().rev().flat_map(|(op, arg_ty)| match op {
                         opp @ Imm(_) => vec![Instr::Push(opp)],
                         Reg(r, _) => vec![Instr::Push(Reg(r, 8))],
-                        opp => vec![
-                            Instr::Mov(arg_ty, opp, Reg(AX, arg_ty.width())),
-                            Instr::Push(Reg(AX, 8)),
-                        ],
+                        opp => {
+                            let arg_ty = if arg_ty == Longword { Longword } else { Quadword };
+                            vec![
+                                Instr::Mov(arg_ty, opp, Reg(AX, arg_ty.width())),
+                                Instr::Push(Reg(AX, 8)),
+                            ]
+                        }
                     }))
                     .chain([Instr::Call(name.clone())])
                     .chain((stack_depth > 0).then_some(Instr::Binary(
@@ -1115,7 +1179,7 @@ impl ir::Value {
                 }) {
                     Data(name.clone())
                 } else {
-                    let name = eco_format!("_const_{}", GEN.fetch_add(1, Relaxed));
+                    let name = eco_format!("L_c_{}", GEN.fetch_add(1, Relaxed));
                     let tl = TopLevel::StaticConstant {
                         name: name.clone(),
                         init: ast::StaticInit::Double(*i),
@@ -1176,7 +1240,7 @@ impl ir::BinOp {
             Self::BitOr => Left(Operator::Or),
             Self::BitXor => Left(Operator::Xor),
             Self::LeftShift => Left(Operator::Shl),
-            Self::RightShift => Left(Operator::Shr),
+            Self::RightShift => Left(Operator::Sar),
             Self::Divide => Left(Operator::DivDouble), // double division only
 
             Self::Reminder => {

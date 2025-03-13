@@ -42,8 +42,8 @@ impl Display for TopLevel {
             }
             Self::Function { name, global, params, body } => {
                 write!(f, "Function: {name}. global:{global}. (")?;
-                for param in params {
-                    write!(f, "{param}, ")?;
+                for (idx, param) in params.iter().enumerate() {
+                    write!(f, "{}{param}", if idx != 0 { ", " } else { "" })?;
                 }
                 writeln!(f, ")")?;
 
@@ -98,9 +98,9 @@ impl Display for Instr {
             Self::JumpIfNotZero { cond, target } => write!(f, "jump_nz  {cond:<10} -> {target}"),
             Self::Label(target) => write!(f, "\tLABEL {target}"),
             Self::FuncCall { name, args, dst } => {
-                write!(f, "{:<8} <- call {name} (", dst.0)?;
-                for arg in args {
-                    write!(f, "{arg}, ")?;
+                write!(f, "{:<8} <- call {name}(", dst.0)?;
+                for (idx, arg) in args.iter().enumerate() {
+                    write!(f, "{}{arg}", if idx != 0 { ", " } else { "" })?;
                 }
                 write!(f, ")")
             }

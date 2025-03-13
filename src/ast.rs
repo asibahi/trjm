@@ -108,8 +108,8 @@ impl Display for Type {
             Self::Func { params, ret } => {
                 let mut buf = Ecow::new();
                 write!(buf, "func (")?;
-                for param in params {
-                    write!(buf, "{param}, ")?;
+                for (idx, param) in params.iter().enumerate() {
+                    write!(buf, "{}{param}", if idx != 0 { ", " } else { "" })?;
                 }
                 write!(buf, ") -> {ret}")?;
 
@@ -493,8 +493,8 @@ impl Display for FuncDecl {
         let ln = ln.trim();
 
         write!(f, "{ln}")?;
-        for (ty, name) in params.iter().zip(&self.params) {
-            write!(f, "{ty} {name}, ")?;
+        for (idx, (ty, name)) in params.iter().zip(&self.params).enumerate() {
+            write!(f, "{}{ty} {name}", if idx != 0 { ", " } else { "" })?;
         }
         write!(f, ")")?;
 
@@ -1466,8 +1466,8 @@ impl Display for Expr {
             }
             Expr::FuncCall { name, args } => {
                 let mut buf = Ecow::new();
-                for arg in args {
-                    write!(buf, "{arg}, ")?;
+                for (idx, arg) in args.iter().enumerate() {
+                    write!(buf, "{}{arg}", if idx != 0 { ", " } else { "" })?;
                 }
                 write!(f, "{name}({buf})")
             }

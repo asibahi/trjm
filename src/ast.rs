@@ -1796,11 +1796,19 @@ pub enum Const {
     ULong(u64),
     Double(f64),
 }
-// Const values do not include NaN. Hash is needed for switch statements.
+// Const values do not include NaN. 
 impl Eq for Const {}
+// Hash is used in switch statements, which cannot be doubles.
 impl Hash for Const {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         core::mem::discriminant(self).hash(state);
+        match self {
+            Const::Int(i) => i.hash(state),
+            Const::Long(i) => i.hash(state),
+            Const::UInt(i) => i.hash(state),
+            Const::ULong(i) => i.hash(state),
+            Const::Double(_) => {},
+        }
     }
 }
 

@@ -563,6 +563,7 @@ impl ast::Expr {
                 instrs.push(cast_instr);
                 Value::Var(dst_var)
             }
+            Self::AddressOf(_) | Self::Dereference(_) => todo!(),
         }
     }
 }
@@ -603,6 +604,7 @@ fn postfix_prefix_instrs(
         Type::ULong => Const::ULong(1),
         Type::Double => Const::Double(1.0),
         Type::Func { .. } => unreachable!(),
+        Type::Pointer { .. } => todo!(),
     };
 
     instrs.push(Instr::Binary {
@@ -666,6 +668,8 @@ impl ast::UnaryOp {
             Self::Plus | Self::IncPre | Self::IncPost | Self::DecPre | Self::DecPost => {
                 unreachable!("implemented in expr.to_ir")
             }
+
+            Self::AddressOf | Self::Dereference => todo!()
         }
     }
 }

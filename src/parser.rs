@@ -10,7 +10,7 @@ use nom::{
     Finish, Parser,
     branch::alt,
     bytes::take,
-    combinator::{all_consuming, opt, verify},
+    combinator::{all_consuming, fail, opt, success, verify},
     error,
     multi::{fold, many, separated_list0, separated_list1},
     sequence::{delimited, preceded, separated_pair, terminated},
@@ -29,10 +29,6 @@ fn parse_program(i: Tokens<'_>) -> ParseResult<'_, Program> {
     many(1.., parse_decl).map(Program::new).parse_complete(i)
 }
 
-fn parse_decl(i: Tokens<'_>) -> ParseResult<'_, Decl> {
-    parse_var_decl.map(Decl::Var).or(parse_func_decl.map(Decl::Func)).parse_complete(i)
-}
-
 macro_rules! tag_token {
     // weird counting stuff
     (@$t:pat) => { 1 };
@@ -49,7 +45,135 @@ macro_rules! tag_token {
     };
 }
 
-fn parse_type(i: Tokens<'_>) -> ParseResult<'_, Type> {
+fn parse_var_decl(i: Tokens<'_>) -> ParseResult<'_, VarDecl> {
+    parse_decl
+        .map_opt(|decl| match decl {
+            Decl::Func(_) => None,
+            Decl::Var(var) => Some(var),
+        })
+        .parse_complete(i)
+}
+
+fn parse_decl(i: Tokens<'_>) -> ParseResult<'_, Decl> {
+    let (i, (ret, sc)) = parse_specifiers.parse_complete(i)?;
+
+    let (i, (name, decl_type, param_names)) = parse_declarator
+        .map_opt(|declarator| process_declarator(declarator, ret.clone()))
+        .parse_complete(i)?;
+
+    let result = match decl_type {
+        Type::Func { .. } => {
+            let (i, body) =
+                parse_block.map(Some).or(tag_token!(Token::Semicolon => None)).parse_complete(i)?;
+
+            (i, Decl::Func(FuncDecl { name, params: param_names, body, sc, fun_type: decl_type }))
+        }
+        _ => {
+            let (i, init) = terminated(
+                opt(preceded(tag_token!(Token::Equal), parse_expr)),
+                tag_token!(Token::Semicolon),
+            )
+            .parse_complete(i)?;
+
+            (i, Decl::Var(VarDecl { name, init, sc, var_type: decl_type }))
+        }
+    };
+
+    Ok(result)
+}
+
+enum Declarator {
+    Ident(Ecow),
+    Pointer(Box<Declarator>),
+    Func(Vec<ParamInfo>, Box<Declarator>),
+}
+
+struct ParamInfo {
+    type_: Type,
+    declarator: Declarator,
+}
+
+fn parse_param_info(i: Tokens<'_>) -> ParseResult<'_, Vec<ParamInfo>> {
+    delimited(
+        tag_token!(Token::ParenOpen),
+        alt((
+            tag_token!(Token::Void => Vec::new()),
+            separated_list1(
+                tag_token!(Token::Comma),
+                parse_base_type
+                    .and(parse_declarator)
+                    .map(|(type_, declarator)| ParamInfo { type_, declarator }),
+            ),
+        )),
+        tag_token!(Token::ParenClose),
+    )
+    .parse_complete(i)
+}
+
+fn parse_declarator(i: Tokens<'_>) -> ParseResult<'_, Declarator> {
+    precedence(
+        // prefix: pointer
+        unary_op(2, tag_token!(Token::Astrisk => ())),
+        // postfix : function
+        unary_op(1, parse_param_info),
+        // infix, inapplicable
+        fail(),
+        // operands
+        alt((
+            delimited(
+                tag_token!(Token::ParenOpen),
+                parse_declarator,
+                tag_token!(Token::ParenClose),
+            ),
+            parse_ident.map(Declarator::Ident),
+        )),
+        // fold function
+        |op: Operation<_, _, (), _>| -> Result<Declarator, ()> {
+            let ret = match op {
+                Operation::Prefix((), d) => Declarator::Pointer(Box::new(d)),
+                Operation::Postfix(d, params) => Declarator::Func(params, Box::new(d)),
+                Operation::Binary(_, _, _) => return Err(()),
+            };
+            Ok(ret)
+        },
+    )(i)
+}
+
+fn process_declarator(declarator: Declarator, base: Type) -> Option<(Ecow, Type, Vec<Ecow>)> {
+    match declarator {
+        Declarator::Ident(name) => Some((name, base, Vec::new())),
+        Declarator::Pointer(declarator) => {
+            let derived = Type::Pointer { to: Box::new(base) };
+            process_declarator(*declarator, derived)
+        }
+        Declarator::Func(params, d) => match *d {
+            Declarator::Ident(name) => {
+                let mut param_types = Vec::with_capacity(params.len());
+                let mut param_names = Vec::with_capacity(params.len());
+                for param in params {
+                    let (pname, pty, _) =
+                        process_declarator(param.declarator, param.type_.clone())?;
+
+                    if matches!(param.type_, Type::Func { .. }) {
+                        // should coerce to a function pointer
+                        return None;
+                    }
+
+                    param_types.push(pty);
+                    param_names.push(pname);
+                }
+
+                let derived = Type::Func { params: param_types, ret: Box::new(base) };
+
+                Some((name, derived, param_names))
+            }
+            // function pointers can be added starting here
+            _ => None,
+        },
+    }
+}
+
+fn parse_base_type(i: Tokens<'_>) -> ParseResult<'_, Type> {
     // i really hate this function.
 
     many(
@@ -123,46 +247,9 @@ fn parse_specifiers(i: Tokens<'_>) -> ParseResult<'_, (Type, StorageClass)> {
     }
 
     let sc = sc.first().map_or(StorageClass::None, |i| *i);
-    let (_, ty) = parse_type(Tokens::from(&ty[..])).map_err(|e| e.map_input(|_| i))?;
+    let (_, ty) = parse_base_type(Tokens::from(&ty[..])).map_err(|e| e.map_input(|_| i))?;
 
     Ok((i, (ty, sc)))
-}
-
-fn parse_var_decl(i: Tokens<'_>) -> ParseResult<'_, VarDecl> {
-    let (i, (ty, sc)) = parse_specifiers.parse_complete(i)?;
-
-    terminated(
-        (parse_ident, opt(preceded(tag_token!(Token::Equal), parse_expr))),
-        tag_token!(Token::Semicolon),
-    )
-    .map(|(name, init)| VarDecl { name, init, sc, var_type: ty.clone() })
-    .parse_complete(i)
-}
-
-fn parse_func_decl(i: Tokens<'_>) -> ParseResult<'_, FuncDecl> {
-    let (i, (ret, sc)) = parse_specifiers.parse_complete(i)?;
-
-    let (i, name) = parse_ident.parse_complete(i)?;
-    let (i, params) = delimited(
-        tag_token!(Token::ParenOpen),
-        alt((
-            tag_token!(Token::Void => Vec::new()),
-            separated_list1(tag_token!(Token::Comma), parse_type.and(parse_ident)),
-        )),
-        tag_token!(Token::ParenClose),
-    )
-    .parse_complete(i)?;
-
-    let (tps, params) = params.into_iter().unzip();
-
-    let fun_type = Type::Func { params: tps, ret: Box::new(ret) };
-
-    let (i, body) =
-        parse_block.map(Some).or(tag_token!(Token::Semicolon => None)).parse_complete(i)?;
-
-    let func_def = FuncDecl { name, params, body, sc, fun_type };
-
-    Ok((i, func_def))
 }
 
 fn parse_block(i: Tokens<'_>) -> ParseResult<'_, Block> {
@@ -289,6 +376,45 @@ macro_rules! binop {
     };
 }
 
+#[derive(Debug, Clone)]
+enum AbstractDeclarator {
+    Pointer(Box<AbstractDeclarator>),
+    Base,
+}
+
+fn parse_abstract_declarator(i: Tokens<'_>) -> ParseResult<'_, AbstractDeclarator> {
+    precedence(
+        // pointer
+        unary_op(2, tag_token!(Token::Astrisk => ())),
+        fail(),
+        fail(),
+        alt((
+            delimited(
+                tag_token!(Token::ParenOpen),
+                parse_abstract_declarator,
+                tag_token!(Token::ParenClose),
+            ),
+            success(AbstractDeclarator::Base),
+        )),
+        |op: Operation<_, (), (), _>| -> Result<AbstractDeclarator, ()> {
+            match op {
+                Operation::Prefix((), d) => Ok(AbstractDeclarator::Pointer(Box::new(d))),
+                Operation::Postfix(_, _) | Operation::Binary(_, _, _) => Err(()),
+            }
+        },
+    )(i)
+}
+
+fn process_abstract_declarator(declarator: AbstractDeclarator, base: Type) -> Option<Type> {
+    match declarator {
+        AbstractDeclarator::Pointer(declarator) => {
+            let derived = Type::Pointer { to: Box::new(base) };
+            process_abstract_declarator(*declarator, derived)
+        }
+        AbstractDeclarator::Base => Some(base),
+    }
+}
+
 fn parse_prefixes(i: Tokens<'_>) -> ParseResult<'_, Unary<Either<UnaryOp, Type>, i32>> {
     alt((
         unary_op(2, tag_token!(Token::Hyphen => Left(UnaryOp::Negate))),
@@ -298,12 +424,21 @@ fn parse_prefixes(i: Tokens<'_>) -> ParseResult<'_, Unary<Either<UnaryOp, Type>,
         // chapter 5 extra credit
         unary_op(2, tag_token!(Token::DblPlus => Left(UnaryOp::IncPre))),
         unary_op(2, tag_token!(Token::DblHyphen => Left(UnaryOp::DecPre))),
-        // chapter 11 cast operation
+        // chapter 11 cast operation // also chapter 14 declarators (todo)
         unary_op(
             2,
-            delimited(tag_token!(Token::ParenOpen), parse_type, tag_token!(Token::ParenClose))
-                .map(Right),
+            delimited(
+                tag_token!(Token::ParenOpen),
+                parse_base_type
+                    .and(parse_abstract_declarator)
+                    .map_opt(|(ty, de)| process_abstract_declarator(de, ty)),
+                tag_token!(Token::ParenClose),
+            )
+            .map(Right),
         ),
+        // chapter 14 pointers // is this enough?
+        unary_op(2, tag_token!(Token::Ambersand => Left(UnaryOp::AddressOf))),
+        unary_op(2, tag_token!(Token::Astrisk => Left(UnaryOp::Dereference))),
     ))
     .parse_complete(i)
 }
@@ -437,6 +572,8 @@ fn parse_expr(i: Tokens<'_>) -> ParseResult<'_, TypedExpr> {
         |op| -> Result<TypedExpr, ()> {
             use Operation::*;
             Ok(match op {
+                Prefix(Left(UnaryOp::AddressOf), exp) => Expr::AddressOf(Box::new(exp)),
+                Prefix(Left(UnaryOp::Dereference), exp) => Expr::Dereference(Box::new(exp)),
                 Prefix(Left(op), exp) | Postfix(exp, op) => Expr::Unary(op, Box::new(exp)),
                 Prefix(Right(ty), exp) => Expr::Cast { target: ty, inner: Box::new(exp) },
                 Binary(lhs, Typical(op), rhs) => {

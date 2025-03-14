@@ -96,6 +96,7 @@ pub enum Type {
     ULong,
     Double,
     Func { params: Vec<Type>, ret: Box<Type> },
+    Pointer { to: Box<Type> },
 }
 impl Display for Type {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -115,6 +116,10 @@ impl Display for Type {
 
                 f.pad(&buf)
             }
+            Self::Pointer { to } => {
+                let buf = eco_format!("ptr->({to})");
+                f.pad(&buf)
+            }
         }
     }
 }
@@ -129,6 +134,7 @@ impl Type {
             ),
 
             Self::Double => unreachable!("double size unused for IR"),
+            Self::Pointer { .. } => todo!(),
         }
     }
     pub fn signed(&self) -> bool {
@@ -139,6 +145,7 @@ impl Type {
                 "function types don't have size. why is function in the same type anyway ?"
             ),
             Self::Double => unreachable!("doubled signedness unused for IR"),
+            Self::Pointer { .. } => todo!(),
         }
     }
     fn get_common_type(self, other: Self) -> Self {
@@ -164,6 +171,7 @@ impl Type {
             Self::Func { .. } => unreachable!("function static value not a thing"),
 
             Self::Double => StaticInit::Double(0.0),
+            Self::Pointer { .. } => todo!(),
         }
     }
     fn is_intish(&self) -> bool {
@@ -1450,27 +1458,31 @@ pub enum Expr {
     Assignemnt(Box<TypedExpr>, Box<TypedExpr>),
     Conditional { cond: Box<TypedExpr>, then: Box<TypedExpr>, else_: Box<TypedExpr> },
     FuncCall { name: Ecow, args: Vec<TypedExpr> },
+    Dereference(Box<TypedExpr>),
+    AddressOf(Box<TypedExpr>),
 }
 impl Display for Expr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Expr::Const(cnst) => write!(f, "{cnst}"),
-            Expr::Var(var) => write!(f, "{var}"),
-            Expr::Cast { target, inner } => write!(f, "({inner} as {target})"),
-            Expr::Unary(op, expr) => write!(f, "({op} {expr})"),
-            Expr::Binary { op, lhs, rhs } => write!(f, "({lhs} {op} {rhs})"),
-            Expr::CompoundAssignment { op, lhs, rhs } => write!(f, "({lhs} {op}= {rhs})"),
-            Expr::Assignemnt(lhs, rhs) => write!(f, "({lhs} <- {rhs})"),
-            Expr::Conditional { cond, then, else_ } => {
+            Self::Const(cnst) => write!(f, "{cnst}"),
+            Self::Var(var) => write!(f, "{var}"),
+            Self::Cast { target, inner } => write!(f, "({inner} as ({target}))"),
+            Self::Unary(op, expr) => write!(f, "({op} {expr})"),
+            Self::Binary { op, lhs, rhs } => write!(f, "({lhs} {op} {rhs})"),
+            Self::CompoundAssignment { op, lhs, rhs } => write!(f, "({lhs} {op}= {rhs})"),
+            Self::Assignemnt(lhs, rhs) => write!(f, "({lhs} <- {rhs})"),
+            Self::Conditional { cond, then, else_ } => {
                 write!(f, "({cond} ? {then} : {else_})")
             }
-            Expr::FuncCall { name, args } => {
+            Self::FuncCall { name, args } => {
                 let mut buf = Ecow::new();
                 for (idx, arg) in args.iter().enumerate() {
                     write!(buf, "{}{arg}", if idx != 0 { ", " } else { "" })?;
                 }
                 write!(f, "{name}({buf})")
             }
+            Self::AddressOf(expr) => write!(f, "(& {expr})"),
+            Self::Dereference(expr) => write!(f, "(* {expr})"),
         }
     }
 }
@@ -1484,6 +1496,7 @@ impl Expr {
 
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {
         match self {
+            Self::AddressOf(_) | Self::Dereference(_) => todo!(),
             Self::Assignemnt(left, right) if matches!(left.expr, Expr::Var(_)) => {
                 Ok(Self::Assignemnt(
                     Box::new(left.resolve_identifiers(map)?),
@@ -1553,6 +1566,7 @@ impl Expr {
 
     fn type_check(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<TypedExpr> {
         match self {
+            Self::AddressOf(_) | Self::Dereference(_) => todo!(),
             Self::FuncCall { name, args } => {
                 let (types, ret) = match &symbols
                     .get(&name)
@@ -1810,6 +1824,8 @@ macro_rules! const_cast {
 
         match ($self, $target_type) {
             (_, Type::Func { .. }) => unreachable!(),
+            (_, Type::Pointer { .. }) => todo!(),
+
             $(
                 (Self::Int(i), Type::$types) => Self::$types(i as _),
                 (Self::Long(i), Type::$types) => Self::$types(i as _),
@@ -1853,18 +1869,24 @@ pub enum UnaryOp {
     IncPost,
     DecPre,
     DecPost,
+
+    // chapter 14 pointers
+    AddressOf,
+    Dereference,
 }
 impl Display for UnaryOp {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            UnaryOp::Complement => f.pad("~"),
-            UnaryOp::Negate => f.pad("-"),
-            UnaryOp::Not => f.pad("!"),
-            UnaryOp::Plus => f.pad(""),
-            UnaryOp::IncPre => f.pad("++@"),
-            UnaryOp::IncPost => f.pad("@++"),
-            UnaryOp::DecPre => f.pad("--@"),
-            UnaryOp::DecPost => f.pad("@--"),
+            Self::Complement => f.pad("~"),
+            Self::Negate => f.pad("-"),
+            Self::Not => f.pad("!"),
+            Self::Plus => f.pad(""),
+            Self::IncPre => f.pad("++@"),
+            Self::IncPost => f.pad("@++"),
+            Self::DecPre => f.pad("--@"),
+            Self::DecPost => f.pad("@--"),
+            Self::AddressOf => f.pad("&"),
+            Self::Dereference => f.pad("*"),
         }
     }
 }
@@ -1896,24 +1918,24 @@ pub enum BinaryOp {
 impl Display for BinaryOp {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            BinaryOp::Add => f.pad("+"),
-            BinaryOp::Subtract => f.pad("-"),
-            BinaryOp::Multiply => f.pad("*"),
-            BinaryOp::Divide => f.pad("/"),
-            BinaryOp::Reminder => f.pad("%"),
-            BinaryOp::And => f.pad("&&"),
-            BinaryOp::Or => f.pad("||"),
-            BinaryOp::Equal => f.pad("=="),
-            BinaryOp::NotEqual => f.pad("!="),
-            BinaryOp::LessThan => f.pad("<"),
-            BinaryOp::LessOrEqual => f.pad("<="),
-            BinaryOp::GreaterThan => f.pad(">"),
-            BinaryOp::GreaterOrEqual => f.pad(">="),
-            BinaryOp::BitAnd => f.pad("&"),
-            BinaryOp::BitOr => f.pad("|"),
-            BinaryOp::BitXor => f.pad("^"),
-            BinaryOp::LeftShift => f.pad("<<"),
-            BinaryOp::RightShift => f.pad(">>"),
+            Self::Add => f.pad("+"),
+            Self::Subtract => f.pad("-"),
+            Self::Multiply => f.pad("*"),
+            Self::Divide => f.pad("/"),
+            Self::Reminder => f.pad("%"),
+            Self::And => f.pad("&&"),
+            Self::Or => f.pad("||"),
+            Self::Equal => f.pad("=="),
+            Self::NotEqual => f.pad("!="),
+            Self::LessThan => f.pad("<"),
+            Self::LessOrEqual => f.pad("<="),
+            Self::GreaterThan => f.pad(">"),
+            Self::GreaterOrEqual => f.pad(">="),
+            Self::BitAnd => f.pad("&"),
+            Self::BitOr => f.pad("|"),
+            Self::BitXor => f.pad("^"),
+            Self::LeftShift => f.pad("<<"),
+            Self::RightShift => f.pad(">>"),
         }
     }
 }

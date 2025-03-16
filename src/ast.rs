@@ -171,11 +171,14 @@ impl Type {
             Self::Func { .. } => unreachable!("function static value not a thing"),
 
             Self::Double => StaticInit::Double(0.0),
-            Self::Pointer { .. } => todo!(),
+            Self::Pointer { .. } => StaticInit::ULong(0),
         }
     }
     fn is_intish(&self) -> bool {
         matches!(self, Type::Int | Type::Long | Type::UInt | Type::ULong)
+    }
+    fn is_arithmatic(&self) -> bool {
+        matches!(self, Type::Int | Type::Long | Type::UInt | Type::ULong | Type::Double)
     }
 }
 
@@ -441,7 +444,9 @@ impl VarDecl {
                 );
 
                 self.init = match self.init {
-                    Some(v) => Some(v.type_check(symbols)?),
+                    Some(v) => {
+                        Some(v.type_check(symbols)?.cast_by_assignment(self.var_type.clone())?)
+                    }
                     None => None,
                 };
             }
@@ -1338,7 +1343,7 @@ impl Stmt {
     ) -> anyhow::Result<Self> {
         Ok(match self {
             Self::Return(expr) => {
-                let expr = expr.type_check(symbols)?.cast_to_type(enclosing_func_ret);
+                let expr = expr.type_check(symbols)?.cast_by_assignment(enclosing_func_ret)?;
 
                 Self::Return(expr)
             }
@@ -1439,11 +1444,42 @@ impl TypedExpr {
         self.expr.type_check(symbols)
     }
 
+    fn is_place(&self) -> bool {
+        self.expr.is_place()
+    }
+    fn is_null_pointer_constant(&self) -> bool {
+        self.expr.is_null_pointer_constant()
+    }
+    fn common_ptr_type(&self, other: &Self) -> anyhow::Result<Type> {
+        let e1_t = self.type_.clone().ok_or(anyhow::anyhow!("type should be known"))?;
+        let e2_t = other.type_.clone().ok_or(anyhow::anyhow!("type should be known"))?;
+
+        match () {
+            _ if e1_t == e2_t => Ok(e1_t),
+            _ if self.is_null_pointer_constant() => Ok(e2_t),
+            _ if other.is_null_pointer_constant() => Ok(e1_t),
+            _ => Err(anyhow::anyhow!("incompatible types")),
+        }
+    }
+
     fn cast_to_type(self, target: Type) -> Self {
         if self.type_ == Some(target.clone()) {
             return self;
         }
         Expr::Cast { target: target.clone(), inner: Box::new(self) }.typed(target)
+    }
+
+    fn cast_by_assignment(self, target: Type) -> anyhow::Result<Self> {
+        if self.type_ == Some(target.clone()) {
+            Ok(self)
+        } else if (self.clone().type_.is_some_and(|t| t.is_arithmatic()) && target.is_arithmatic())
+        // unsure about this
+            || (self.is_null_pointer_constant() && matches!(target, Type::Pointer { .. }))
+        {
+            Ok(self.cast_to_type(target))
+        } else {
+            Err(anyhow::anyhow!("cannot convert type for assignment"))
+        }
     }
 }
 
@@ -1458,8 +1494,8 @@ pub enum Expr {
     Assignemnt(Box<TypedExpr>, Box<TypedExpr>),
     Conditional { cond: Box<TypedExpr>, then: Box<TypedExpr>, else_: Box<TypedExpr> },
     FuncCall { name: Ecow, args: Vec<TypedExpr> },
-    Dereference(Box<TypedExpr>),
-    AddressOf(Box<TypedExpr>),
+    Deref(Box<TypedExpr>),
+    AddrOf(Box<TypedExpr>),
 }
 impl Display for Expr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -1481,8 +1517,8 @@ impl Display for Expr {
                 }
                 write!(f, "{name}({buf})")
             }
-            Self::AddressOf(expr) => write!(f, "(& {expr})"),
-            Self::Dereference(expr) => write!(f, "(* {expr})"),
+            Self::AddrOf(expr) => write!(f, "(& {expr})"),
+            Self::Deref(expr) => write!(f, "(* {expr})"),
         }
     }
 }
@@ -1493,56 +1529,48 @@ impl Expr {
     pub fn typed(self, ty: Type) -> TypedExpr {
         TypedExpr { expr: self, type_: Some(ty) }
     }
+    fn is_place(&self) -> bool {
+        matches!(self, Self::Var(_) | Self::Deref(_))
+    }
+    fn is_null_pointer_constant(&self) -> bool {
+        match self {
+            Self::Const(c) => c.is_null_pointer_constant(),
+            _ => false,
+        }
+    }
 
     fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {
-        match self {
-            Self::AddressOf(_) | Self::Dereference(_) => todo!(),
-            Self::Assignemnt(left, right) if matches!(left.expr, Expr::Var(_)) => {
-                Ok(Self::Assignemnt(
-                    Box::new(left.resolve_identifiers(map)?),
-                    Box::new(right.resolve_identifiers(map)?),
-                ))
-            }
-            Self::Assignemnt(_, _) => anyhow::bail!("left value isn't a variable"),
+        Ok(match self {
+            Self::Assignemnt(left, right) => Self::Assignemnt(
+                Box::new(left.resolve_identifiers(map)?),
+                Box::new(right.resolve_identifiers(map)?),
+            ),
 
-            Self::Unary(op, expr)
-                if matches!(
-                    op,
-                    UnaryOp::IncPre | UnaryOp::IncPost | UnaryOp::DecPre | UnaryOp::DecPost
-                ) && !matches!(expr.expr, Expr::Var(_)) =>
-            {
-                anyhow::bail!("left value to increment/decrement isn't a variable");
-            }
-            Self::Unary(op, expr) => Ok(Self::Unary(op, Box::new(expr.resolve_identifiers(map)?))),
-
-            Self::Binary { op, lhs, rhs } => Ok(Self::Binary {
+            Self::Unary(op, expr) => Self::Unary(op, Box::new(expr.resolve_identifiers(map)?)),
+            Self::Binary { op, lhs, rhs } => Self::Binary {
                 op,
                 lhs: Box::new(lhs.resolve_identifiers(map)?),
                 rhs: Box::new(rhs.resolve_identifiers(map)?),
-            }),
-
-            Self::CompoundAssignment { lhs, .. } if !matches!(lhs.expr, Expr::Var(_)) => {
-                anyhow::bail!("left value to compound assignment isn't a variable");
-            }
-            Self::CompoundAssignment { op, lhs, rhs } => Ok(Self::CompoundAssignment {
+            },
+            Self::CompoundAssignment { op, lhs, rhs } => Self::CompoundAssignment {
                 op,
                 lhs: Box::new(lhs.resolve_identifiers(map)?),
                 rhs: Box::new(rhs.resolve_identifiers(map)?),
-            }),
+            },
 
-            v @ Self::Const(_) => Ok(v),
-            Self::Conditional { cond, then, else_ } => Ok(Self::Conditional {
+            v @ Self::Const(_) => v,
+            Self::Conditional { cond, then, else_ } => Self::Conditional {
                 cond: Box::new(cond.resolve_identifiers(map)?),
                 then: Box::new(then.resolve_identifiers(map)?),
                 else_: Box::new(else_.resolve_identifiers(map)?),
-            }),
+            },
 
             // magic happens here
             Self::Var(var) => map
                 .get(&var)
                 .cloned()
                 .map(|t| Self::Var(t.name))
-                .ok_or(anyhow::anyhow!("variable does not exist in map")),
+                .ok_or(anyhow::anyhow!("variable does not exist in map"))?,
             Self::FuncCall { name, args } => {
                 let name = map
                     .get(&name)
@@ -1555,18 +1583,39 @@ impl Expr {
                     resolved_args.push(arg.resolve_identifiers(map)?);
                 }
 
-                Ok(Self::FuncCall { name, args: resolved_args })
+                Self::FuncCall { name, args: resolved_args }
             }
             Self::Cast { target: to, inner: from } => {
                 let from = Box::new(from.resolve_identifiers(map)?);
-                Ok(Self::Cast { target: to, inner: from })
+                Self::Cast { target: to, inner: from }
             }
-        }
+            Self::AddrOf(expr) => Self::AddrOf(Box::new(expr.resolve_identifiers(map)?)),
+            Self::Deref(expr) => Self::Deref(Box::new(expr.resolve_identifiers(map)?)),
+        })
     }
 
     fn type_check(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<TypedExpr> {
         match self {
-            Self::AddressOf(_) | Self::Dereference(_) => todo!(),
+            Self::AddrOf(expr) => {
+                let expr = Box::new(expr.type_check(symbols)?);
+                anyhow::ensure!(expr.is_place(), "cannot take the address of a non-place");
+
+                let to = Box::new(
+                    expr.type_
+                        .clone()
+                        .ok_or(anyhow::anyhow!("type must be known at this point"))?,
+                );
+
+                Ok(Self::AddrOf(expr).typed(Type::Pointer { to }))
+            }
+            Self::Deref(expr) => {
+                let expr = expr.type_check(symbols)?;
+                if let Some(Type::Pointer { to }) = expr.type_.clone() {
+                    Ok(Self::Deref(Box::new(expr)).typed(*to))
+                } else {
+                    anyhow::bail!("cannot deref a non-pointer")
+                }
+            }
             Self::FuncCall { name, args } => {
                 let (types, ret) = match &symbols
                     .get(&name)
@@ -1584,7 +1633,7 @@ impl Expr {
                 let mut acc = Vec::with_capacity(types.len());
                 for (arg, ty) in args.iter().cloned().zip(types) {
                     let arg = arg.type_check(symbols)?;
-                    acc.push(arg.cast_to_type(ty));
+                    acc.push(arg.cast_by_assignment(ty)?);
                 }
 
                 Ok(Self::FuncCall { name, args: acc }.typed(ret))
@@ -1607,11 +1656,41 @@ impl Expr {
                     UnaryOp::Complement if expr.type_ == Some(Type::Double) => {
                         anyhow::bail!("cannot complement a double")
                     }
+                    UnaryOp::Complement | UnaryOp::Negate
+                        if matches!(expr.type_, Some(Type::Pointer { .. })) =>
+                    {
+                        anyhow::bail!("cannot complement or negate a pointer")
+                    }
+                    UnaryOp::IncPre | UnaryOp::IncPost | UnaryOp::DecPre | UnaryOp::DecPost
+                        if !expr.is_place() =>
+                    {
+                        anyhow::bail!("cannot increment or decrement a non place expression")
+                    }
                     UnaryOp::Not => Type::Int,
                     _ => expr.clone().type_.expect("unary type should be known"),
                 };
 
                 Ok(Self::Unary(op, expr).typed(ty))
+            }
+
+            Self::Binary { op: op @ (BinaryOp::Equal | BinaryOp::NotEqual), lhs, rhs } => {
+                let lhs = Box::new(lhs.type_check(symbols)?);
+                let rhs = Box::new(rhs.type_check(symbols)?);
+
+                let lhs_t = lhs.clone().type_.expect("type should exist");
+                let rhs_t = rhs.clone().type_.expect("type should exist");
+
+                let common_type = match (&lhs_t, &rhs_t) {
+                    (Type::Pointer { .. }, _) | (_, Type::Pointer { .. }) => {
+                        lhs.common_ptr_type(&rhs)?
+                    }
+                    _ => lhs_t.get_common_type(rhs_t),
+                };
+
+                let lhs = Box::new(lhs.cast_to_type(common_type.clone()));
+                let rhs = Box::new(rhs.cast_to_type(common_type));
+
+                Ok(Self::Binary { op, lhs, rhs }.typed(Type::Int))
             }
 
             Self::Binary { op, lhs, rhs } => {
@@ -1623,9 +1702,16 @@ impl Expr {
                         return Ok(Self::Binary { op, lhs, rhs }.typed(Type::Int));
                     }
                     BinaryOp::Reminder
-                        if lhs.type_ == Some(Type::Double) || rhs.type_ == Some(Type::Double) =>
+                        if !(lhs.type_.as_ref().is_some_and(|t| t.is_intish())
+                            && rhs.type_.as_ref().is_some_and(|t| t.is_intish())) =>
                     {
-                        anyhow::bail!("cannot modulo a double")
+                        anyhow::bail!("cannot modulo a double or a pointer")
+                    }
+                    BinaryOp::Multiply | BinaryOp::Divide
+                        if !(lhs.type_.as_ref().is_some_and(|t| t.is_arithmatic())
+                            && rhs.type_.as_ref().is_some_and(|t| t.is_arithmatic())) =>
+                    {
+                        anyhow::bail!("cannot mulyiply a pointer")
                     }
                     _ => {}
                 }
@@ -1666,30 +1752,35 @@ impl Expr {
                         anyhow::bail!("cannot apply operation to a double")
                     }
 
-                    BinaryOp::Equal
-                    | BinaryOp::NotEqual
-                    | BinaryOp::GreaterThan
+                    BinaryOp::GreaterThan
                     | BinaryOp::GreaterOrEqual
                     | BinaryOp::LessThan
                     | BinaryOp::LessOrEqual => ret.typed(Type::Int),
 
-                    BinaryOp::And | BinaryOp::Or => unreachable!(),
+                    BinaryOp::Equal | BinaryOp::NotEqual | BinaryOp::And | BinaryOp::Or => {
+                        unreachable!()
+                    }
                 })
             }
 
             Self::Assignemnt(lhs, rhs) => {
                 let lhs = Box::new(lhs.type_check(symbols)?);
+                anyhow::ensure!(lhs.is_place(), "cannot assign to a non place expression");
+
                 let rhs = rhs.type_check(symbols)?;
 
                 let left_type =
                     lhs.clone().type_.expect("assignee type should be known at this point");
-                let rhs = Box::new(rhs.cast_to_type(left_type.clone()));
+
+                let rhs = Box::new(rhs.cast_by_assignment(left_type.clone())?);
 
                 Ok(Self::Assignemnt(lhs, rhs).typed(left_type))
             }
 
             Self::CompoundAssignment { op, lhs, rhs } => {
                 let lhs = Box::new(lhs.type_check(symbols)?);
+                anyhow::ensure!(lhs.is_place(), "cannot assign to a non place expression");
+
                 let rhs = Box::new(rhs.type_check(symbols)?);
 
                 let common = lhs
@@ -1706,7 +1797,7 @@ impl Expr {
                     | BinaryOp::RightShift
                         if !common.is_intish() =>
                     {
-                        anyhow::bail!("can't operate those on a double")
+                        anyhow::bail!("can't operate those on a non integer")
                     }
                     BinaryOp::And | BinaryOp::Or => {
                         return Ok(Self::CompoundAssignment { op, lhs, rhs }.typed(Type::Int));
@@ -1726,6 +1817,7 @@ impl Expr {
                 let rhs = Box::new(rhs.cast_to_type(common.clone()));
 
                 let ret = if matches!(lhs_cast.expr, Expr::Cast { .. }) {
+                    // this is probably wrong
                     Self::Assignemnt(
                         lhs,
                         Box::new(Expr::Binary { op, lhs: lhs_cast, rhs }.typed(common)),
@@ -1751,9 +1843,9 @@ impl Expr {
                     | BinaryOp::GreaterThan
                     | BinaryOp::GreaterOrEqual
                     | BinaryOp::LessThan
-                    | BinaryOp::LessOrEqual => ret.typed(Type::Int),
-
-                    BinaryOp::And | BinaryOp::Or => unreachable!(),
+                    | BinaryOp::LessOrEqual
+                    | BinaryOp::And
+                    | BinaryOp::Or => unreachable!(),
                 })
             }
             Self::Const(c) => match c {
@@ -1768,11 +1860,15 @@ impl Expr {
                 let then = then.type_check(symbols)?;
                 let else_ = else_.type_check(symbols)?;
 
-                let common = then
-                    .clone()
-                    .type_
-                    .and_then(|lht| else_.clone().type_.map(|rht| lht.get_common_type(rht)))
-                    .expect("ternary operand type should be known at this point");
+                let then_t = then.clone().type_.expect("then type must be known");
+                let else_t = else_.clone().type_.expect("then type must be known");
+
+                let common = match (&then_t, &else_t) {
+                    (Type::Pointer { .. }, _) | (_, Type::Pointer { .. }) => {
+                        then.common_ptr_type(&else_)?
+                    }
+                    _ => then_t.get_common_type(else_t),
+                };
 
                 let then = Box::new(then.cast_to_type(common.clone()));
                 let else_ = Box::new(else_.cast_to_type(common.clone()));
@@ -1782,6 +1878,12 @@ impl Expr {
 
             Self::Cast { target, inner } => {
                 let inner = Box::new(inner.type_check(symbols)?);
+                match (&target, inner.type_.as_ref().expect("type must be known")) {
+                    (Type::Double, Type::Pointer { .. }) | (Type::Pointer { .. }, Type::Double) => {
+                        anyhow::bail!("cannot cast pointers to double or vice versa")
+                    }
+                    _ => {}
+                }
                 Ok(Self::Cast { target: target.clone(), inner }.typed(target))
             }
         }
@@ -1796,7 +1898,7 @@ pub enum Const {
     ULong(u64),
     Double(f64),
 }
-// Const values do not include NaN. 
+// Const values do not include NaN.
 impl Eq for Const {}
 // Hash is used in switch statements, which cannot be doubles.
 impl Hash for Const {
@@ -1807,7 +1909,7 @@ impl Hash for Const {
             Const::Long(i) => i.hash(state),
             Const::UInt(i) => i.hash(state),
             Const::ULong(i) => i.hash(state),
-            Const::Double(_) => {},
+            Const::Double(_) => {}
         }
     }
 }
@@ -1832,7 +1934,10 @@ macro_rules! const_cast {
 
         match ($self, $target_type) {
             (_, Type::Func { .. }) => unreachable!(),
-            (_, Type::Pointer { .. }) => todo!(),
+            (Self::Int(0), Type::Pointer{..}) => Self::ULong(0),
+            (Self::Long(0), Type::Pointer{..}) => Self::ULong(0),
+            (Self::UInt(0), Type::Pointer{..}) => Self::ULong(0),
+            (Self::ULong(0), Type::Pointer{..}) => Self::ULong(0),
 
             $(
                 (Self::Int(i), Type::$types) => Self::$types(i as _),
@@ -1843,6 +1948,8 @@ macro_rules! const_cast {
                 // maybe?
                 (Self::Double(i), Type::$types) => Self::$types(i as _),
             )+
+
+            _ => unreachable!()
         }
     };
 }
@@ -1860,6 +1967,9 @@ impl Const {
             Self::ULong(i) => StaticInit::ULong(i),
             Self::Double(i) => StaticInit::Double(i),
         }
+    }
+    fn is_null_pointer_constant(&self) -> bool {
+        matches!(self, Const::Int(0) | Const::Long(0) | Const::UInt(0) | Const::ULong(0))
     }
 }
 

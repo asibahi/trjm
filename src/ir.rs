@@ -563,7 +563,7 @@ impl ast::Expr {
                 instrs.push(cast_instr);
                 Value::Var(dst_var)
             }
-            Self::AddressOf(_) | Self::Dereference(_) => todo!(),
+            Self::AddrOf(_) | Self::Deref(_) => todo!(),
         }
     }
 }

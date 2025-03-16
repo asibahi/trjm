@@ -572,8 +572,8 @@ fn parse_expr(i: Tokens<'_>) -> ParseResult<'_, TypedExpr> {
         |op| -> Result<TypedExpr, ()> {
             use Operation::*;
             Ok(match op {
-                Prefix(Left(UnaryOp::AddressOf), exp) => Expr::AddressOf(Box::new(exp)),
-                Prefix(Left(UnaryOp::Dereference), exp) => Expr::Dereference(Box::new(exp)),
+                Prefix(Left(UnaryOp::AddressOf), exp) => Expr::AddrOf(Box::new(exp)),
+                Prefix(Left(UnaryOp::Dereference), exp) => Expr::Deref(Box::new(exp)),
                 Prefix(Left(op), exp) | Postfix(exp, op) => Expr::Unary(op, Box::new(exp)),
                 Prefix(Right(ty), exp) => Expr::Cast { target: ty, inner: Box::new(exp) },
                 Binary(lhs, Typical(op), rhs) => {

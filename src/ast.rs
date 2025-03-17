@@ -128,24 +128,22 @@ impl Type {
     pub fn size(&self) -> usize {
         match self {
             Self::Int | Self::UInt => 4,
-            Self::Long | Self::ULong => 8,
+            Self::Long | Self::ULong | Self::Pointer { .. } => 8,
             Self::Func { .. } => unreachable!(
                 "function types don't have size. why is function in the same type anyway ?"
             ),
 
             Self::Double => unreachable!("double size unused for IR"),
-            Self::Pointer { .. } => todo!(),
         }
     }
     pub fn signed(&self) -> bool {
         match self {
             Self::Int | Self::Long => true,
-            Self::UInt | Self::ULong => false,
+            Self::UInt | Self::ULong | Self::Pointer { .. } => false,
             Self::Func { .. } => unreachable!(
                 "function types don't have size. why is function in the same type anyway ?"
             ),
             Self::Double => unreachable!("doubled signedness unused for IR"),
-            Self::Pointer { .. } => todo!(),
         }
     }
     fn get_common_type(self, other: Self) -> Self {

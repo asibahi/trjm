@@ -1206,6 +1206,7 @@ impl ir::Instr {
                     .chain([Instr::Mov(*dst_ty, dst_ty.return_register(), dst.to_asm())])
                     .collect()
             }
+            Self::GetAddress { ..  } | Self::Load { .. } | Self::Store { .. } => todo!()
         }
     }
 }

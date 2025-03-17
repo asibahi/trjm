@@ -71,6 +71,12 @@ pub enum Instr {
     Unary { op: UnOp, src: Value, dst: Place },
     Binary { op: BinOp, lhs: Value, rhs: Value, dst: Place },
     Copy { src: Value, dst: Place },
+
+    // Places and Values here are in flex for now
+    GetAddress { src: Value, dst: Place },
+    Load { src_ptr: Value, dst: Place },
+    Store { src: Value, dst_ptr: Place },
+
     Jump { target: Ecow },
     JumpIfZero { cond: Value, target: Ecow },
     JumpIfNotZero { cond: Value, target: Ecow },
@@ -104,6 +110,11 @@ impl Display for Instr {
                 }
                 write!(f, ")")
             }
+
+            // maybe?
+            Self::GetAddress { src, dst } => write!(f, "{:<8} <- addr {}", dst.0, src),
+            Self::Load { src_ptr, dst } => write!(f, "{:<8} <- load {src_ptr}", dst.0),
+            Self::Store { src, dst_ptr } => write!(f, "{:<8} <- store {src}", dst_ptr.0),
         }
     }
 }
@@ -263,7 +274,7 @@ impl ast::Stmt {
 
         match self {
             Self::Return(expr) => {
-                let dst = expr.to_ir(instrs, symbols);
+                let dst = expr.to_ir_and_convert(instrs, symbols);
                 instrs.push(Instr::Return(dst));
             }
             Self::Expression(expr) => {
@@ -274,7 +285,7 @@ impl ast::Stmt {
 
                 let else_label = eco_format!("else.{}", counter);
 
-                let cond = cond.to_ir(instrs, symbols);
+                let cond = cond.to_ir_and_convert(instrs, symbols);
                 // Do I need Copy Instr here ?
                 instrs.push(Instr::JumpIfZero { cond, target: else_label.clone() });
 
@@ -315,7 +326,7 @@ impl ast::Stmt {
                     symbols,
                 );
 
-                let ctrl = ctrl.to_ir(instrs, symbols);
+                let ctrl = ctrl.to_ir_and_convert(instrs, symbols);
 
                 for v in cases.iter().filter_map(|c| *c) {
                     instrs.extend([
@@ -365,7 +376,7 @@ impl ast::Stmt {
                 body.to_ir(instrs, symbols);
 
                 instrs.push(Instr::Label(cntn_label(label)));
-                let cond = cond.to_ir(instrs, symbols);
+                let cond = cond.to_ir_and_convert(instrs, symbols);
 
                 instrs.extend([
                     Instr::JumpIfNotZero { cond, target: start_label },
@@ -377,7 +388,7 @@ impl ast::Stmt {
                 let end_label = brk_label(label);
                 instrs.push(Instr::Label(start_label.clone()));
 
-                let cond = cond.to_ir(instrs, symbols);
+                let cond = cond.to_ir_and_convert(instrs, symbols);
                 instrs.push(Instr::JumpIfZero { cond, target: end_label.clone() });
                 body.to_ir(instrs, symbols);
 
@@ -397,7 +408,7 @@ impl ast::Stmt {
                 instrs.push(Instr::Label(start_label.clone()));
 
                 if let Some(cond) = cond {
-                    let cond = cond.to_ir(instrs, symbols);
+                    let cond = cond.to_ir_and_convert(instrs, symbols);
                     instrs.push(Instr::JumpIfZero { cond, target: brk_label.clone() });
                 }
 
@@ -414,21 +425,56 @@ impl ast::Stmt {
         }
     }
 }
+
+enum ExprResult {
+    Plain(Value),
+    DerefPtr(Value),
+}
+
 impl ast::TypedExpr {
-    fn to_ir(&self, instrs: &mut Vec<Instr>, symbols: &mut Namespace<TypeCtx>) -> Value {
+    fn to_ir_and_convert(
+        &self,
+        instrs: &mut Vec<Instr>,
+        symbols: &mut Namespace<TypeCtx>,
+    ) -> Value {
+        self.expr.to_ir_and_convert(
+            instrs,
+            symbols,
+            self.type_.as_ref().expect("expr type is known"),
+        )
+    }
+    fn to_ir(&self, instrs: &mut Vec<Instr>, symbols: &mut Namespace<TypeCtx>) -> ExprResult {
         self.expr.to_ir(instrs, symbols, self.type_.as_ref().expect("expr type is known"))
     }
 }
 
 impl ast::Expr {
-    fn to_ir(
+    fn to_ir_and_convert(
         &self,
         instrs: &mut Vec<Instr>,
         symbols: &mut Namespace<TypeCtx>,
         expr_type: &Type,
     ) -> Value {
+        let result = self.to_ir(instrs, symbols, expr_type);
+        match result {
+            ExprResult::Plain(value) => value,
+            ExprResult::DerefPtr(ptr) => {
+                let dst = make_ir_variable("deref_ptr", expr_type.clone(), symbols);
+                instrs.push(Instr::Load { src_ptr: ptr, dst: dst.clone() });
+
+                Value::Var(dst)
+            }
+        }
+    }
+
+    fn to_ir(
+        &self,
+        instrs: &mut Vec<Instr>,
+        symbols: &mut Namespace<TypeCtx>,
+        expr_type: &Type,
+    ) -> ExprResult {
         match self {
-            Self::Const(i) => Value::Const(*i),
+            Self::Const(i) => ExprResult::Plain(Value::Const(*i)),
 
             Self::Unary(ast::UnaryOp::Plus, expr) => expr.to_ir(instrs, symbols),
             Self::Unary(
@@ -439,60 +485,72 @@ impl ast::Expr {
                 expr,
             ) => postfix_prefix_instrs(instrs, symbols, *op, expr, expr_type),
             Self::Unary(unary_op, expr) => {
-                let src = expr.to_ir(instrs, symbols);
+                let src = expr.to_ir_and_convert(instrs, symbols);
 
                 let dst = make_ir_variable("unop", expr_type.clone(), symbols);
                 let op = unary_op.to_ir();
                 instrs.push(Instr::Unary { op, src, dst: dst.clone() });
 
-                Value::Var(dst)
+                ExprResult::Plain(Value::Var(dst))
             }
             Self::Binary { op: op @ (ast::BinaryOp::And | ast::BinaryOp::Or), lhs, rhs } => {
                 logical_ops_instrs(instrs, symbols, *op, lhs, rhs, expr_type)
             }
             Self::Binary { op, lhs, rhs } => {
-                let lhs = lhs.to_ir(instrs, symbols);
-                let rhs = rhs.to_ir(instrs, symbols);
+                let lhs = lhs.to_ir_and_convert(instrs, symbols);
+                let rhs = rhs.to_ir_and_convert(instrs, symbols);
 
                 let dst = make_ir_variable("binop", expr_type.clone(), symbols);
 
                 let op = op.to_ir();
 
                 instrs.push(Instr::Binary { op, lhs, rhs, dst: dst.clone() });
-                Value::Var(dst)
+                ExprResult::Plain(Value::Var(dst))
             }
-            Self::Var(id) => Value::Var(Place(id.clone())),
+            Self::Var(id) => ExprResult::Plain(Value::Var(Place(id.clone()))),
             Self::Assignemnt(place, value) => {
-                let ast::Expr::Var(ref dst) = place.expr else {
-                    unreachable!(
-                        "assignment place expression should be resolved earlier. {place:?}"
-                    )
-                };
+                let place = place.to_ir(instrs, symbols);
+                let value = value.to_ir_and_convert(instrs, symbols);
 
-                let rhs = if place.type_ == value.type_ {
-                    value.to_ir(instrs, symbols)
-                } else {
-                    ast::Expr::Cast { target: place.type_.clone().unwrap(), inner: value.clone() }
-                        .typed(place.type_.clone().unwrap())
-                        .to_ir(instrs, symbols)
-                };
+                match &place {
+                    ExprResult::Plain(obj) => {
+                        let Value::Var(obj) = obj else { unreachable!() };
+                        instrs.push(Instr::Copy { src: value, dst: obj.clone() });
 
-                instrs.push(Instr::Copy { src: rhs, dst: Place(dst.clone()) });
-
-                Value::Var(Place(dst.clone()))
+                        place
+                    }
+                    ExprResult::DerefPtr(ptr) => {
+                        let Value::Var(ptr) = ptr else {
+                            unreachable!("pointer cannot be a constant")
+                        };
+                        instrs.push(Instr::Store { src: value.clone(), dst_ptr: ptr.clone() });
+                        ExprResult::Plain(value)
+                    }
+                }
             }
+
             Self::CompoundAssignment { op, lhs, rhs } => {
-                let ast::Expr::Var(ref dst) = lhs.expr else {
-                    unreachable!(
-                        "compound assignment place expression should be resolved earlier. {lhs:?}"
-                    )
-                };
+                // probably wrong todo
                 let ret = Self::Binary { op: *op, lhs: lhs.clone(), rhs: rhs.clone() }
-                    .to_ir(instrs, symbols, expr_type);
+                    .to_ir_and_convert(instrs, symbols, expr_type);
 
-                instrs.push(Instr::Copy { src: ret, dst: Place(dst.clone()) });
+                let lhs = lhs.to_ir(instrs, symbols);
 
-                Value::Var(Place(dst.clone()))
+                match &lhs {
+                    ExprResult::Plain(obj) => {
+                        let Value::Var(obj) = obj else { unreachable!() };
+                        instrs.push(Instr::Copy { src: ret, dst: obj.clone() });
+
+                        lhs
+                    }
+                    ExprResult::DerefPtr(ptr) => {
+                        let Value::Var(ptr) = ptr else {
+                            unreachable!("pointer cannot be a constant")
+                        };
+                        instrs.push(Instr::Store { src: ret.clone(), dst_ptr: ptr.clone() });
+                        ExprResult::Plain(ret)
+                    }
+                }
             }
 
             Self::Conditional { cond, then, else_ } => {
@@ -507,40 +565,40 @@ impl ast::Expr {
                     symbols,
                 );
 
-                let cond = cond.to_ir(instrs, symbols);
+                let cond = cond.to_ir_and_convert(instrs, symbols);
                 instrs.push(Instr::JumpIfZero { cond, target: e2_label.clone() });
 
-                let v1 = then.to_ir(instrs, symbols);
+                let v1 = then.to_ir_and_convert(instrs, symbols);
                 instrs.extend([
                     Instr::Copy { src: v1, dst: result.clone() },
                     Instr::Jump { target: end_label.clone() },
                     Instr::Label(e2_label),
                 ]);
 
-                let v2 = else_.to_ir(instrs, symbols);
+                let v2 = else_.to_ir_and_convert(instrs, symbols);
                 instrs.extend([
                     Instr::Copy { src: v2, dst: result.clone() },
                     Instr::Label(end_label),
                 ]);
 
-                Value::Var(result)
+                ExprResult::Plain(Value::Var(result))
             }
 
             Self::FuncCall { name, args } => {
                 let dst = make_ir_variable("cll", expr_type.clone(), symbols);
 
-                let vals = args.iter().map(|arg| arg.to_ir(instrs, symbols)).collect();
+                let vals = args.iter().map(|arg| arg.to_ir_and_convert(instrs, symbols)).collect();
 
                 instrs.push(Instr::FuncCall { name: name.clone(), args: vals, dst: dst.clone() });
 
-                Value::Var(dst)
+                ExprResult::Plain(Value::Var(dst))
             }
 
             Self::Cast { target, inner } => {
-                let src = inner.to_ir(instrs, symbols);
+                let src = inner.to_ir_and_convert(instrs, symbols);
                 let src_ty = inner.type_.as_ref().expect("inner expr type should be known");
                 if target == src_ty {
-                    return src;
+                    return ExprResult::Plain(src);
                 }
 
                 let dst_var = make_ir_variable("cst", expr_type.clone(), symbols);
@@ -561,9 +619,27 @@ impl ast::Expr {
                 };
 
                 instrs.push(cast_instr);
-                Value::Var(dst_var)
+                ExprResult::Plain(Value::Var(dst_var))
             }
-            Self::AddrOf(_) | Self::Deref(_) => todo!(),
+            Self::AddrOf(inner) => {
+                let v = inner.to_ir(instrs, symbols);
+                match v {
+                    ExprResult::Plain(obj) => {
+                        let dst = make_ir_variable(
+                            "addr",
+                            inner.type_.clone().expect("type must be known"),
+                            symbols,
+                        );
+                        instrs.push(Instr::GetAddress { src: obj, dst: dst.clone() });
+                        ExprResult::Plain(Value::Var(dst))
+                    }
+                    ExprResult::DerefPtr(value) => ExprResult::Plain(value),
+                }
+            }
+            Self::Deref(inner) => {
+                let result = inner.to_ir_and_convert(instrs, symbols);
+                ExprResult::DerefPtr(result)
+            }
         }
     }
 }
@@ -574,7 +650,7 @@ fn postfix_prefix_instrs(
     op: ast::UnaryOp,
     expr: &ast::TypedExpr,
     expr_type: &Type,
-) -> Value {
+) -> ExprResult {
     let ast::Expr::Var(ref dst) = expr.expr else {
         unreachable!("post/prefix place expression should be resolved earlier. {expr:?}")
     };
@@ -604,7 +680,7 @@ fn postfix_prefix_instrs(
         Type::ULong => Const::ULong(1),
         Type::Double => Const::Double(1.0),
         Type::Func { .. } => unreachable!(),
-        Type::Pointer { .. } => todo!(),
+        Type::Pointer { .. } => unreachable!(),
     };
 
     instrs.push(Instr::Binary {
@@ -614,7 +690,7 @@ fn postfix_prefix_instrs(
         dst: var.clone(),
     });
 
-    if cache { Value::Var(tmp) } else { Value::Var(var) }
+    ExprResult::Plain(if cache { Value::Var(tmp) } else { Value::Var(var) })
 }
 
 fn logical_ops_instrs(
@@ -624,7 +700,7 @@ fn logical_ops_instrs(
     lhs: &ast::TypedExpr,
     rhs: &ast::TypedExpr,
     expr_type: &Type,
-) -> Value {
+) -> ExprResult {
     let counter = GEN.fetch_add(1, Relaxed);
 
     let or = matches!(op, ast::BinaryOp::Or);
@@ -634,14 +710,14 @@ fn logical_ops_instrs(
 
     let dst = make_ir_variable("lgc", expr_type.clone(), symbols);
 
-    let v1 = lhs.to_ir(instrs, symbols);
+    let v1 = lhs.to_ir_and_convert(instrs, symbols);
     instrs.push(if or {
         Instr::JumpIfNotZero { cond: v1, target: cond_jump.clone() }
     } else {
         Instr::JumpIfZero { cond: v1, target: cond_jump.clone() }
     });
 
-    let v2 = rhs.to_ir(instrs, symbols);
+    let v2 = rhs.to_ir_and_convert(instrs, symbols);
     instrs.extend([
         if or {
             Instr::JumpIfNotZero { cond: v2, target: cond_jump.clone() }
@@ -655,7 +731,7 @@ fn logical_ops_instrs(
         Instr::Label(end),
     ]);
 
-    Value::Var(dst)
+    ExprResult::Plain(Value::Var(dst))
 }
 
 impl ast::UnaryOp {
@@ -665,11 +741,13 @@ impl ast::UnaryOp {
             Self::Negate => UnOp::Negate,
             Self::Not => UnOp::Not,
 
-            Self::Plus | Self::IncPre | Self::IncPost | Self::DecPre | Self::DecPost => {
-                unreachable!("implemented in expr.to_ir")
-            }
-
-            Self::AddressOf | Self::Dereference => todo!()
+            Self::Plus
+            | Self::IncPre
+            | Self::IncPost
+            | Self::DecPre
+            | Self::DecPost
+            | Self::AddressOf
+            | Self::Dereference => unreachable!("implemented in expr.to_ir"),
         }
     }
 }
@@ -737,14 +815,13 @@ impl ast::VarDecl {
                 unreachable!()
             };
             let v = if *dst_type == e.type_.clone().unwrap() {
-                e.to_ir(instrs, symbols)
+                e.to_ir_and_convert(instrs, symbols)
             } else {
                 ast::Expr::Cast { target: dst_type.clone(), inner: Box::new(e.clone()) }
                     .typed(dst_type.clone())
-                    .to_ir(instrs, symbols)
+                    .to_ir_and_convert(instrs, symbols)
             };
 
-            // let v = e.to_ir(instrs, symbols);
             instrs.push(Instr::Copy { src: v, dst: Place(self.name.clone()) });
         }
     }

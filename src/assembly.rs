@@ -29,12 +29,15 @@ impl From<TypeCtx> for BSymbol {
             (Type::Int, Local) => BSymbol::new_obj(Longword, true, false, false),
             (Type::UInt, Local) => BSymbol::new_obj(Longword, false, false, false),
             (Type::Long, Static { .. }) => BSymbol::new_obj(Quadword, true, true, false),
-            (Type::ULong, Static { .. }) => BSymbol::new_obj(Quadword, false, true, false),
+            (Type::ULong | Type::Pointer { .. }, Static { .. }) => {
+                BSymbol::new_obj(Quadword, false, true, false)
+            }
             (Type::Long, Local) => BSymbol::new_obj(Quadword, true, false, false),
-            (Type::ULong, Local) => BSymbol::new_obj(Quadword, false, false, false),
+            (Type::ULong | Type::Pointer { .. }, Local) => {
+                BSymbol::new_obj(Quadword, false, false, false)
+            }
             (Type::Double, Static { .. }) => BSymbol::new_obj(Doubleword, false, true, false),
             (Type::Double, Local) => BSymbol::new_obj(Doubleword, false, false, false),
-            (Type::Pointer { .. },_) => todo!()
         }
     }
 }
@@ -196,17 +199,26 @@ fn fixup_instruction(instrs: &mut Vec<Instr>) {
 
     for instr in std::mem::take(instrs) {
         match instr {
+            Instr::Push(op @ Reg(r, _)) if r.is_xmm() => out.extend([
+                Instr::Binary(Operator::Sub, Quadword, Imm(8), Reg(SP, 8)),
+                Instr::Mov(Doubleword, op, Reg(SP, 8)),
+            ]),
+            Instr::Lea(src, dst @ (Memory(..) | Data(_))) => out.extend([
+                Instr::Lea(src, Reg(R11, 8)  ),
+                Instr::Mov(Quadword, Reg(R11, 8), dst),
+            ]),
             Instr::Mov(ty, Imm(0), dst @ Reg(..)) => {
                 out.push(Instr::Binary(Operator::Xor, ty, dst.clone(), dst));
             }
-            Instr::Mov(ty, src @ (Stack(_) | Data(_)), dst @ (Stack(_) | Data(_))) => {
+            Instr::Mov(ty, src @ (Memory(..) | Data(_)), dst @ (Memory(..) | Data(_))) => {
                 let reg = if ty == Doubleword { XMM15 } else { R10 };
                 out.extend([
                     Instr::Mov(ty, src, Reg(reg, ty.width())),
+                    // here. what is generating this?
                     Instr::Mov(ty, Reg(reg, ty.width()), dst),
                 ]);
             }
-            Instr::Mov(ty, src @ Imm(i), dst @ (Stack(_) | Data(_)))
+            Instr::Mov(ty, src @ Imm(i), dst @ (Memory(..) | Data(_)))
                 if i32::try_from(i).is_err() =>
             {
                 let reg = if ty == Doubleword { XMM15 } else { R10 };
@@ -218,12 +230,11 @@ fn fixup_instruction(instrs: &mut Vec<Instr>) {
             Instr::Mov(Longword, Imm(i), dst) if i32::try_from(i).is_err() => {
                 out.push(Instr::Mov(Longword, Imm(i64::from(i as i32)), dst));
             }
-            Instr::Cmp(Doubleword, src,dst @ (Stack(_) | Data(_))) => {
-                out.extend([
-                    Instr::Mov(Doubleword, dst, Reg(XMM15, 8)),
-                    Instr::Cmp(Doubleword, src, Reg(XMM15, 8))
-                ]);
-            }
+            Instr::Cmp(Doubleword, src,dst @ (Memory(..) | Data(_))) => out.extend([
+                Instr::Mov(Doubleword, dst, Reg(XMM15, 8)),
+                Instr::Cmp(Doubleword, src, Reg(XMM15, 8))
+            ]),
+            
             Instr::Cmp(ty, src @ Imm(i), dst)
                 if i32::try_from(i).is_err() =>
             {
@@ -232,7 +243,7 @@ fn fixup_instruction(instrs: &mut Vec<Instr>) {
                     Instr::Cmp(ty, Reg(R10, ty.width()), dst),
                 ]);
             }
-            Instr::Cmp(ty, src @ (Stack(_) | Data(_)), dst @ (Stack(_) | Data(_))) => {
+            Instr::Cmp(ty, src @ (Memory(..) | Data(_)), dst @ (Memory(..) | Data(_))) => {
                 out.extend([
                     Instr::Mov(ty, src, Reg(R10, ty.width())),
                     Instr::Cmp(ty, Reg(R10, ty.width()), dst),
@@ -288,8 +299,8 @@ fn fixup_instruction(instrs: &mut Vec<Instr>) {
                 | Operator::Or
                 | Operator::Xor),
                 ty,
-                src @ (Stack(_) | Data(_)),
-                dst @ (Stack(_) | Data(_)),
+                src @ (Memory(..) | Data(_)),
+                dst @ (Memory(..) | Data(_)),
             ) => {
                 let reg = if ty == Doubleword { XMM15 } else { R10 };
                 let re2 = if ty == Doubleword { XMM14 } else { R11 };
@@ -300,7 +311,7 @@ fn fixup_instruction(instrs: &mut Vec<Instr>) {
                     Instr::Mov(ty, Reg(re2, ty.width()), dst),
                 ])
             },
-            Instr::Binary(Operator::Mul, ty, src, dst @ (Stack(_) | Data(_))) => {
+            Instr::Binary(Operator::Mul, ty, src, dst @ (Memory(..) | Data(_))) => {
                 let reg = if ty == Doubleword { XMM14 } else { R11 };
 
                 out.extend([
@@ -313,7 +324,7 @@ fn fixup_instruction(instrs: &mut Vec<Instr>) {
                 opp @ (Operator::Shl | Operator::Sar| Operator::Shr),
                 ty,
                 src,
-                dst @ (Stack(_) | Data(_)),
+                dst @ (Memory(..) | Data(_)),
             ) if src != Reg(CX, 1) => {
                 out.extend([
                     Instr::Mov(ty, src, Reg(CX, ty.width())),
@@ -327,7 +338,7 @@ fn fixup_instruction(instrs: &mut Vec<Instr>) {
                     Instr::Movsx(Reg(R10, 4), dst),
                 ]);
             }
-            Instr::Movsx(src, dst @ (Stack(_) | Data(_)   )) => {
+            Instr::Movsx(src, dst @ (Memory(..) | Data(_)   )) => {
                 out.extend([
                     Instr::Movsx(src, Reg(R11, 8)),
                     Instr::Mov(Quadword, Reg(R11, 8), dst),
@@ -336,14 +347,14 @@ fn fixup_instruction(instrs: &mut Vec<Instr>) {
             Instr::MovZeroExtend(src,dst @ Reg(_,_)) => {
                 out.push(Instr::Mov(Longword, src, dst.align_width(Longword)));
             }
-            Instr::MovZeroExtend(src,dst @ (Stack(_) | Data(_)) ) => {
+            Instr::MovZeroExtend(src,dst @ (Memory(..) | Data(_)) ) => {
                 out.extend([
                     Instr::Mov(Longword, src, Reg(R11, 4)),
                     Instr::Mov(Quadword, Reg(R11, 8), dst),
                     ]);
             }
 
-            Instr::Cvttsd2si(ty, src,dst @ ( Stack(_) | Data(_)) ) =>
+            Instr::Cvttsd2si(ty, src,dst @ ( Memory(..) | Data(_)) ) =>
             {
                 out.extend([
                     Instr::Cvttsd2si(ty, src, Reg(R11,ty.width())),
@@ -357,7 +368,7 @@ fn fixup_instruction(instrs: &mut Vec<Instr>) {
                     Instr::Cvtsi2sd(ty, Reg(R10, ty.width()), dst)
                 ]);
             }
-            Instr::Cvtsi2sd(ty, src,dst @(Stack(_) | Data(_)) ) =>{
+            Instr::Cvtsi2sd(ty, src,dst @(Memory(..) | Data(_)) ) =>{
                 out.extend([
                     Instr::Cvtsi2sd(ty, src, Reg(XMM15, 8)),
                     Instr::Mov(Doubleword , Reg(XMM15, 8), dst),
@@ -376,6 +387,8 @@ pub enum Instr {
     Mov(AsmType, Operand, Operand),
     Movsx(Operand, Operand),
     MovZeroExtend(Operand, Operand),
+    // Load Effective Address
+    Lea(Operand, Operand),
     // convert truncate scalar double to signed integer
     Cvttsd2si(AsmType, Operand, Operand),
     Cvtsi2sd(AsmType, Operand, Operand),
@@ -511,6 +524,12 @@ impl Instr {
                 let dst = dst.emit_code();
                 _ = writeln!(f, "\tcvttsd2si{ty} {src:<5} {dst}")
             }
+            Self::Lea(src, dst) => {
+                let src = src.emit_code() + ",";
+                let dst = dst.emit_code();
+
+                _ = writeln!(f, "\tleaq    {src:<5} {dst}")
+            }
         }
     }
 
@@ -531,7 +550,8 @@ impl Instr {
             | Self::Mov(_, opp1, opp2)
             | Self::Cmp(_, opp1, opp2)
             | Self::Cvtsi2sd(_, opp1, opp2)
-            | Self::Cvttsd2si(_, opp1, opp2) => {
+            | Self::Cvttsd2si(_, opp1, opp2)
+            | Self::Lea(opp1, opp2) => {
                 opp1.replace_pseudos(map, stack_depth, symbols);
                 opp2.replace_pseudos(map, stack_depth, symbols);
             }
@@ -557,7 +577,7 @@ pub enum Operand {
     Imm(i64),
     Reg(Register, u8),
     Pseudo(Ecow),
-    Stack(i32),
+    Memory(Register, i32),
     Data(Ecow),
 }
 use Operand::*;
@@ -574,7 +594,7 @@ impl Operand {
         match self {
             Imm(i) => eco_format!("${i}"),
             Reg(r, s) => r.emit_code(*s).into(),
-            Stack(i) => eco_format!("{i}(%rbp)"),
+            Memory(r, i) => eco_format!("{i}({})", r.emit_code(8)),
             Data(name) => eco_format!("_{name}(%rip)"),
 
             Pseudo(e) => unreachable!("pseudo register {e} printed"),
@@ -592,7 +612,7 @@ impl Operand {
         };
 
         let mut new_place = if map.contains_key(name) {
-            Stack(map[name])
+            Memory(BP, map[name])
         } else if symbols
             .get(name)
             .is_some_and(|tc| matches!(tc, BSymbol::Obj { is_static: true, .. }))
@@ -614,7 +634,7 @@ impl Operand {
             }
 
             map.insert(name.clone(), *stack_depth);
-            Stack(*stack_depth)
+            Memory(BP, *stack_depth)
         };
 
         std::mem::swap(self, &mut new_place);
@@ -669,7 +689,8 @@ pub enum Register {
     R10,
     R11,
     CX,
-    SP,
+    SP, // Stack Pointer
+    BP, // Base Pointer
 
     XMM0,
     XMM1,
@@ -700,6 +721,7 @@ impl Register {
             (R11,1) => "%r11b", (R11,2) => "%r11w", (R11,4) => "%r11d", (R11,8) => "%r11",
             (CX, 1) => "%cl",   (CX, 2) => "%cx",   (CX, 4) => "%ecx",  (CX, 8) => "%rcx",
        /* stack pointer */      (SP, 2) => "%sp",   (SP, 4) => "%esp",  (SP, 8) => "%rsp",
+       /* stack pointer */      (BP, 2) => "%bp",   (BP, 4) => "%ebp",  (BP, 8) => "%rbp",
             (XMM0, _) => "%xmm0",
             (XMM1, _) => "%xmm1",
             (XMM2, _) => "%xmm2",
@@ -712,6 +734,10 @@ impl Register {
             (XMM15, _) => "%xmm15",
             _ => unreachable!()
         }
+    }
+
+    fn is_xmm(self) -> bool {
+        matches!(self, XMM0 | XMM1 | XMM2 | XMM3 | XMM4 | XMM5 | XMM6 | XMM7 | XMM14 | XMM15)
     }
 }
 
@@ -832,7 +858,7 @@ impl ir::TopLevel {
                             .zip(DOUBLE_ARG_REGISTER)
                             .map(|(param, reg)| ((param, Doubleword), Reg(reg, 8))),
                     )
-                    .chain(stack_args.into_iter().zip((16..).step_by(8).map(Stack)))
+                    .chain(stack_args.into_iter().zip((16..).step_by(8).map(|d| Memory(BP, d))))
                     .map(|((param, arg_ty), reg)| {
                         Instr::Mov(arg_ty, reg.align_width(arg_ty), Pseudo(param.clone()))
                     })
@@ -847,10 +873,9 @@ impl ir::TopLevel {
                 init: *init,
                 alignment: match type_ {
                     Type::Int | Type::UInt => 4,
-                    Type::Long | Type::ULong => 8,
+                    Type::Long | Type::ULong | Type::Pointer { .. } => 8,
                     Type::Double => 8,
                     Type::Func { .. } => unreachable!(),
-                    Type::Pointer { .. } => todo!()
                 },
             },
         }
@@ -868,6 +893,7 @@ impl ir::Instr {
             Self::SignExtend { src, dst } => vec![Instr::Movsx(src.to_asm(consts), dst.to_asm())],
             Self::Truncate { src, dst } => {
                 vec![Instr::Mov(Longword, src.to_asm(consts), dst.to_asm())]
+                
             }
             Self::ZeroExtend { src, dst } => {
                 vec![Instr::MovZeroExtend(src.to_asm(consts), dst.to_asm())]
@@ -1091,6 +1117,8 @@ impl ir::Instr {
                             _ => vec![
                                 Instr::Cmp(src_ty, rhs.to_asm(consts), lhs.to_asm(consts)),
                                 Instr::Mov(*dst_ty, Imm(0), dst.clone()),
+
+
                                 Instr::SetCC(op.to_asm(signed).unwrap_right(), dst),
                             ],
                         }
@@ -1134,7 +1162,7 @@ impl ir::Instr {
                         Instr::Cmp(cond_ty, Imm(0), cond.to_asm(consts)),
                         Instr::JmpCC(NE, target.clone()),
                     ],
-                    // todo for NaN
+
                     Doubleword => vec![
                         Instr::Binary(Operator::Xor, Doubleword, Reg(XMM15, 8), Reg(XMM15, 8)),
                         Instr::Cmp(Doubleword, cond.to_asm(consts), Reg(XMM15, 8)),
@@ -1206,7 +1234,29 @@ impl ir::Instr {
                     .chain([Instr::Mov(*dst_ty, dst_ty.return_register(), dst.to_asm())])
                     .collect()
             }
-            Self::GetAddress { ..  } | Self::Load { .. } | Self::Store { .. } => todo!()
+            Self::GetAddress { src, dst } => {
+                let src = src.to_asm(consts);
+                let dst = dst.to_asm();
+
+                vec![Instr::Lea(src, dst)]
+            }
+            Self::Load { src_ptr, dst } => {
+                let (dst_ty, _) = ir::Value::Var(dst.clone()).to_asm_type(symbols);
+                let dst = dst.to_asm();
+
+                vec![
+                    Instr::Mov(Quadword, src_ptr.to_asm(consts), Reg(AX, 8)),
+                    Instr::Mov(dst_ty, Memory(AX, 0), dst),
+                ]
+            }
+            Self::Store { src, dst_ptr } => {
+                let (src_ty, _) = src.to_asm_type(symbols);
+
+                vec![
+                    Instr::Mov(Quadword, dst_ptr.to_asm(), Reg(AX, 8)),
+                    Instr::Mov(src_ty, src.to_asm(consts), Memory(AX, 0)),
+                ]
+            }
         }
     }
 }

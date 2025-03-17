@@ -1680,7 +1680,8 @@ impl Expr {
 
                 let common_type = match (&lhs_t, &rhs_t) {
                     (Type::Pointer { .. }, _) | (_, Type::Pointer { .. }) => {
-                        lhs.common_ptr_type(&rhs)?
+                       lhs.common_ptr_type(&rhs)?
+
                     }
                     _ => lhs_t.get_common_type(rhs_t),
                 };

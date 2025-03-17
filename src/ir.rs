@@ -627,7 +627,9 @@ impl ast::Expr {
                     ExprResult::Plain(obj) => {
                         let dst = make_ir_variable(
                             "addr",
-                            inner.type_.clone().expect("type must be known"),
+                            Type::Pointer {
+                                to: Box::new(inner.type_.clone().expect("type must be known")),
+                            },
                             symbols,
                         );
                         instrs.push(Instr::GetAddress { src: obj, dst: dst.clone() });

@@ -424,7 +424,7 @@ fn parse_prefixes(i: Tokens<'_>) -> ParseResult<'_, Unary<Either<UnaryOp, Type>,
         // chapter 5 extra credit
         unary_op(2, tag_token!(Token::DblPlus => Left(UnaryOp::IncPre))),
         unary_op(2, tag_token!(Token::DblHyphen => Left(UnaryOp::DecPre))),
-        // chapter 11 cast operation // also chapter 14 declarators (todo)
+        // chapter 11 cast operation // also chapter 14 declarators
         unary_op(
             2,
             delimited(

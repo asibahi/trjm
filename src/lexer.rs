@@ -1,6 +1,6 @@
 #![warn(dead_code)]
 
-use ecow::EcoString as Ecow;
+use ecow::EcoString as Identifier;
 use nom::{
     AsChar, Finish, IResult, Input, Parser,
     branch::alt,
@@ -19,9 +19,9 @@ use std::{
 };
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Token {
+pub enum Token {
     // Stuff
-    Ident(Ecow),
+    Ident(Identifier),
     Integer(u64, IntFlags),
     Float(f64),
 
@@ -33,7 +33,7 @@ pub(crate) enum Token {
     Double,
 
     // Keywords
-    Void, // also doubtful
+    Void,
     Return,
     If,
     Else,
@@ -103,16 +103,18 @@ pub(crate) enum Token {
     ParenClose,
     BraceOpen,
     BraceClose,
+    BracketOpen,
+    BracketClose,
     Semicolon,
     Comma,
 }
 impl Token {
-    pub fn unwrap_ident(&self) -> Option<Ecow> {
-        if let Token::Ident(s) = self { Some(s.clone()) } else { None }
+    pub fn unwrap_ident(&self) -> Option<Identifier> {
+        if let Self::Ident(s) = self { Some(s.clone()) } else { None }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntFlags {
     U,
     UL,
@@ -169,7 +171,16 @@ pub fn lex(i: &str) -> Result<Vec<Token>, LexError<'_>> {
         question_mark,
         colon,
         //
-        alt((semicolon, comma, paren_open, paren_close, brace_open, brace_close)),
+        alt((
+            semicolon,
+            comma,
+            paren_open,
+            paren_close,
+            brace_open,
+            brace_close,
+            bracket_open,
+            bracket_close,
+        )),
         //
         keyword_or_identifier,
         number,
@@ -247,6 +258,8 @@ token!(paren_open, ParenOpen, "(");
 token!(paren_close, ParenClose, ")");
 token!(brace_open, BraceOpen, "{");
 token!(brace_close, BraceClose, "}");
+token!(bracket_open, BracketOpen, "[");
+token!(bracket_close, BracketClose, "]");
 
 token!(
     keyword_or_identifier,
@@ -325,7 +338,7 @@ token!(
 // ======
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Tokens<'s>(pub &'s [Token]);
+pub struct Tokens<'s>(pub &'s [Token]);
 
 impl<'s> From<&'s [Token]> for Tokens<'s> {
     fn from(value: &'s [Token]) -> Self {

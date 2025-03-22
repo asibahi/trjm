@@ -8,10 +8,8 @@ anyhow = "1.0.97"
 duct = "0.13.7"
 ecow = "0.2.3"
 either = "1.14.0"
+indexmap = "2.8.0"
 nom = "8"
 nom-language = "0.1.0"
 pico-args = "0.5.0"
-rustc-hash = "2.1.1"
-
-[dev-dependencies]
-test-case = "3"
+foldhash = "0.1.5"

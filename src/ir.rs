@@ -1,5 +1,5 @@
 use crate::ast::{self, Const, Namespace, StaticInit, StorageClass, Type, TypeCtx};
-use ecow::{EcoString as Ecow, eco_format};
+use ecow::{EcoString as Identifier, eco_format};
 use either::Either::{Left, Right};
 use std::{
     cmp::Ordering,
@@ -18,6 +18,7 @@ impl Display for Program {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Program:")?;
         writeln!(f, "\tSymbols:")?;
+
         for (name, type_ctx) in &self.symbols {
             writeln!(f, "\t\t{name:<8} {type_ctx}")?;
         }
@@ -31,8 +32,8 @@ impl Display for Program {
 
 #[derive(Debug, Clone)]
 pub enum TopLevel {
-    Function { name: Ecow, global: bool, params: Vec<Ecow>, body: Vec<Instr> },
-    StaticVar { name: Ecow, global: bool, type_: Type, init: StaticInit },
+    Function { name: Identifier, global: bool, params: Vec<Identifier>, body: Vec<Instr> },
+    StaticVar { name: Identifier, global: bool, type_: Type, init: StaticInit },
 }
 impl Display for TopLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -72,16 +73,15 @@ pub enum Instr {
     Binary { op: BinOp, lhs: Value, rhs: Value, dst: Place },
     Copy { src: Value, dst: Place },
 
-    // Places and Values here are in flex for now
     GetAddress { src: Value, dst: Place },
     Load { src_ptr: Value, dst: Place },
     Store { src: Value, dst_ptr: Place },
 
-    Jump { target: Ecow },
-    JumpIfZero { cond: Value, target: Ecow },
-    JumpIfNotZero { cond: Value, target: Ecow },
-    Label(Ecow),
-    FuncCall { name: Ecow, args: Vec<Value>, dst: Place },
+    Jump { target: Identifier },
+    JumpIfZero { cond: Value, target: Identifier },
+    JumpIfNotZero { cond: Value, target: Identifier },
+    Label(Identifier),
+    FuncCall { name: Identifier, args: Vec<Value>, dst: Place },
 }
 impl Display for Instr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -111,7 +111,6 @@ impl Display for Instr {
                 write!(f, ")")
             }
 
-            // maybe?
             Self::GetAddress { src, dst } => write!(f, "{:<8} <- addr {}", dst.0, src),
             Self::Load { src_ptr, dst } => write!(f, "{:<8} <- load {src_ptr}", dst.0),
             Self::Store { src, dst_ptr } => write!(f, "{:<8} <- store {src}", dst_ptr.0),
@@ -134,7 +133,7 @@ impl Display for Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct Place(pub Ecow);
+pub struct Place(pub Identifier);
 
 #[derive(Debug, Clone, Copy)]
 pub enum UnOp {
@@ -414,7 +413,7 @@ impl ast::Stmt {
 
                 body.to_ir(instrs, symbols);
 
-                instrs.push(Instr::Label(cntn_label.clone()));
+                instrs.push(Instr::Label(cntn_label));
                 if let Some(post) = post {
                     post.to_ir(instrs, symbols);
                 }
@@ -459,7 +458,7 @@ impl ast::Expr {
         match result {
             ExprResult::Plain(value) => value,
             ExprResult::DerefPtr(ptr) => {
-                let dst = make_ir_variable("deref_ptr", expr_type.clone(), symbols);
+                let dst = make_ir_variable("ptr", expr_type.clone(), symbols);
                 instrs.push(Instr::Load { src_ptr: ptr, dst: dst.clone() });
 
                 Value::Var(dst)
@@ -487,7 +486,7 @@ impl ast::Expr {
             Self::Unary(unary_op, expr) => {
                 let src = expr.to_ir_and_convert(instrs, symbols);
 
-                let dst = make_ir_variable("unop", expr_type.clone(), symbols);
+                let dst = make_ir_variable("uop", expr_type.clone(), symbols);
                 let op = unary_op.to_ir();
                 instrs.push(Instr::Unary { op, src, dst: dst.clone() });
 
@@ -500,7 +499,7 @@ impl ast::Expr {
                 let lhs = lhs.to_ir_and_convert(instrs, symbols);
                 let rhs = rhs.to_ir_and_convert(instrs, symbols);
 
-                let dst = make_ir_variable("binop", expr_type.clone(), symbols);
+                let dst = make_ir_variable("bop", expr_type.clone(), symbols);
 
                 let op = op.to_ir();
 
@@ -530,24 +529,38 @@ impl ast::Expr {
             }
 
             Self::CompoundAssignment { op, lhs, rhs } => {
-                // probably wrong todo
-                let ret = Self::Binary { op: *op, lhs: lhs.clone(), rhs: rhs.clone() }
-                    .to_ir_and_convert(instrs, symbols, expr_type);
-
                 let lhs = lhs.to_ir(instrs, symbols);
+                let rhs = rhs.to_ir_and_convert(instrs, symbols);
+                let tmp = make_ir_variable("cmpd", expr_type.clone(), symbols);
 
                 match &lhs {
                     ExprResult::Plain(obj) => {
-                        let Value::Var(obj) = obj else { unreachable!() };
-                        instrs.push(Instr::Copy { src: ret, dst: obj.clone() });
+                        let Value::Var(dst) = obj else { unreachable!() };
+                        instrs.push(Instr::Binary {
+                            op: op.to_ir(),
+                            lhs: obj.clone(),
+                            rhs,
+                            dst: tmp.clone(),
+                        });
+                        instrs.push(Instr::Copy { src: Value::Var(tmp), dst: dst.clone() });
 
                         lhs
                     }
                     ExprResult::DerefPtr(ptr) => {
-                        let Value::Var(ptr) = ptr else {
+                        let Value::Var(dst) = ptr else {
                             unreachable!("pointer cannot be a constant")
                         };
-                        instrs.push(Instr::Store { src: ret.clone(), dst_ptr: ptr.clone() });
+                        let lhs = make_ir_variable("drf", expr_type.clone(), symbols);
+                        instrs.push(Instr::Load { src_ptr: ptr.clone(), dst: lhs.clone() });
+                        instrs.push(Instr::Binary {
+                            op: op.to_ir(),
+                            lhs: Value::Var(lhs),
+                            rhs,
+                            dst: tmp.clone(),
+                        });
+
+                        let ret = Value::Var(tmp);
+                        instrs.push(Instr::Store { src: ret.clone(), dst_ptr: dst.clone() });
                         ExprResult::Plain(ret)
                     }
                 }
@@ -625,13 +638,7 @@ impl ast::Expr {
                 let v = inner.to_ir(instrs, symbols);
                 match v {
                     ExprResult::Plain(obj) => {
-                        let dst = make_ir_variable(
-                            "addr",
-                            Type::Pointer {
-                                to: Box::new(inner.type_.clone().expect("type must be known")),
-                            },
-                            symbols,
-                        );
+                        let dst = make_ir_variable("addr", expr_type.clone(), symbols);
                         instrs.push(Instr::GetAddress { src: obj, dst: dst.clone() });
                         ExprResult::Plain(Value::Var(dst))
                     }
@@ -653,10 +660,7 @@ fn postfix_prefix_instrs(
     expr: &ast::TypedExpr,
     expr_type: &Type,
 ) -> ExprResult {
-    let ast::Expr::Var(ref dst) = expr.expr else {
-        unreachable!("post/prefix place expression should be resolved earlier. {expr:?}")
-    };
-
+    let lhs = expr.to_ir(instrs, symbols);
     let (op, cache) = match op {
         ast::UnaryOp::IncPost => (ast::BinaryOp::Add, true),
         ast::UnaryOp::DecPost => (ast::BinaryOp::Subtract, true),
@@ -665,15 +669,6 @@ fn postfix_prefix_instrs(
         ast::UnaryOp::DecPre => (ast::BinaryOp::Subtract, false),
         _ => unreachable!(),
     };
-
-    let tmp = make_ir_variable("fix", expr_type.clone(), symbols);
-
-    let var = Place(dst.clone());
-
-    if cache {
-        instrs.push(Instr::Copy { src: Value::Var(var.clone()), dst: tmp.clone() });
-    }
-
     let op = op.to_ir();
     let one = match expr.type_.as_ref().expect("operand type info must be known") {
         Type::Int => Const::Int(1),
@@ -681,18 +676,45 @@ fn postfix_prefix_instrs(
         Type::UInt => Const::UInt(1),
         Type::ULong => Const::ULong(1),
         Type::Double => Const::Double(1.0),
-        Type::Func { .. } => unreachable!(),
-        Type::Pointer { .. } => unreachable!(),
+        Type::Func { .. } | Type::Pointer { .. } => unreachable!(),
     };
+    let result = make_ir_variable("inc", expr_type.clone(), symbols);
 
-    instrs.push(Instr::Binary {
-        op,
-        lhs: Value::Var(var.clone()),
-        rhs: Value::Const(one),
-        dst: var.clone(),
-    });
+    match lhs {
+        ExprResult::Plain(obj) => {
+            let Value::Var(dst) = obj else { unreachable!() };
+            if cache {
+                instrs.push(Instr::Copy { src: Value::Var(dst.clone()), dst: result.clone() });
+            }
+            instrs.push(Instr::Binary {
+                op,
+                lhs: Value::Var(dst.clone()),
+                rhs: Value::Const(one),
+                dst: dst.clone(),
+            });
+            ExprResult::Plain(if cache { Value::Var(result) } else { Value::Var(dst) })
+        }
+        ExprResult::DerefPtr(ptr) => {
+            let dst = make_ir_variable("drf", expr_type.clone(), symbols);
+            instrs.push(Instr::Load { src_ptr: ptr.clone(), dst: dst.clone() });
+            let Value::Var(ptr) = ptr else { unreachable!("pointer cannot be a constant") };
 
-    ExprResult::Plain(if cache { Value::Var(tmp) } else { Value::Var(var) })
+            if cache {
+                instrs.push(Instr::Copy { src: Value::Var(dst.clone()), dst: result.clone() });
+            }
+            instrs.extend([
+                Instr::Binary {
+                    op,
+                    lhs: Value::Var(dst.clone()),
+                    rhs: Value::Const(one),
+                    dst: dst.clone(),
+                },
+                Instr::Store { src: Value::Var(dst.clone()), dst_ptr: ptr },
+            ]);
+
+            ExprResult::Plain(if cache { Value::Var(result) } else { Value::Var(dst) })
+        }
+    }
 }
 
 fn logical_ops_instrs(
@@ -790,10 +812,10 @@ impl ast::Block {
 impl ast::BlockItem {
     fn to_ir(&self, instrs: &mut Vec<Instr>, symbols: &mut Namespace<TypeCtx>) {
         match self {
-            ast::BlockItem::S(stmt) => {
+            Self::S(stmt) => {
                 stmt.to_ir(instrs, symbols);
             }
-            ast::BlockItem::D(decl) => {
+            Self::D(decl) => {
                 decl.to_ir(instrs, symbols);
             }
         }

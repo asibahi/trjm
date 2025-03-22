@@ -1,25 +1,25 @@
 use crate::ir::{self, GEN};
-use ecow::{EcoString as Ecow, eco_format};
+use ecow::{EcoString as Identifier, eco_format};
 use either::Either::{self, Left, Right};
-use rustc_hash::{FxHashMap, FxHashSet};
+use indexmap::{IndexMap, IndexSet, map::Entry};
 use std::{
-    collections::hash_map::Entry,
     fmt::{Display, Formatter, Write},
     hash::Hash,
     ops::Deref,
     sync::atomic::Ordering::Relaxed,
 };
 
-pub type Namespace<T> = FxHashMap<Ecow, T>;
+// IndexMap retains insertion order so it prints consistently
+pub type Namespace<T> = IndexMap<Identifier, T, foldhash::fast::RandomState>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct IdCtx {
-    name: Ecow,
+    name: Identifier,
     in_current_scope: bool,
     has_linkage: bool,
 }
 impl IdCtx {
-    fn new(name: Ecow, in_current_scope: bool, has_linkage: bool) -> Self {
+    fn new(name: Identifier, in_current_scope: bool, has_linkage: bool) -> Self {
         Self { name, in_current_scope, has_linkage }
     }
 }
@@ -77,7 +77,7 @@ impl Program {
                 .resolve_loop_labels()?;
         }
 
-        Ok(Self { decls: self.decls, symbols: self.symbols })
+        Ok(self)
     }
 
     pub fn compile(mut self) -> ir::Program {
@@ -107,7 +107,7 @@ impl Display for Type {
             Self::ULong => f.pad("ulong"),
             Self::Double => f.pad("double"),
             Self::Func { params, ret } => {
-                let mut buf = Ecow::new();
+                let mut buf = Identifier::new();
                 write!(buf, "func (")?;
                 for (idx, param) in params.iter().enumerate() {
                     write!(buf, "{}{param}", if idx != 0 { ", " } else { "" })?;
@@ -150,7 +150,7 @@ impl Type {
         // why is function in the same type anyway ?
         if self == other {
             self
-        } else if self == Type::Double || other == Type::Double {
+        } else if self == Self::Double || other == Self::Double {
             Self::Double
         } else if self.size() == other.size() {
             if self.signed() { other } else { self }
@@ -165,18 +165,17 @@ impl Type {
             Self::Int => StaticInit::Int(0),
             Self::Long => StaticInit::Long(0),
             Self::UInt => StaticInit::UInt(0),
-            Self::ULong => StaticInit::ULong(0),
+            Self::ULong | Self::Pointer { .. } => StaticInit::ULong(0),
             Self::Func { .. } => unreachable!("function static value not a thing"),
 
             Self::Double => StaticInit::Double(0.0),
-            Self::Pointer { .. } => StaticInit::ULong(0),
         }
     }
     fn is_intish(&self) -> bool {
-        matches!(self, Type::Int | Type::Long | Type::UInt | Type::ULong)
+        matches!(self, Self::Int | Self::Long | Self::UInt | Self::ULong)
     }
     fn is_arithmatic(&self) -> bool {
-        matches!(self, Type::Int | Type::Long | Type::UInt | Type::ULong | Type::Double)
+        matches!(self, Self::Int | Self::Long | Self::UInt | Self::ULong | Self::Double)
     }
 }
 
@@ -215,9 +214,7 @@ pub enum StaticInit {
 }
 impl StaticInit {
     pub fn is_zero(self) -> bool {
-        matches!(self, |StaticInit::Int(0)| StaticInit::Long(0)
-            | StaticInit::UInt(0)
-            | StaticInit::ULong(0))
+        matches!(self, |Self::Int(0)| Self::Long(0) | Self::UInt(0) | Self::ULong(0))
     }
 }
 impl Display for StaticInit {
@@ -243,9 +240,9 @@ pub enum StorageClass {
 impl Display for StorageClass {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            StorageClass::Static => f.pad("static"),
-            StorageClass::Extern => f.pad("extern"),
-            StorageClass::None => Ok(()),
+            Self::Static => f.pad("static"),
+            Self::Extern => f.pad("extern"),
+            Self::None => Ok(()),
         }
     }
 }
@@ -264,11 +261,11 @@ pub enum Decl {
 impl Display for Decl {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let indent = f.width().unwrap_or_default();
-        let pad = Ecow::from("\t").repeat(indent);
+        let pad = Identifier::from("\t").repeat(indent);
 
         match self {
-            Decl::Func(func) => write!(f, "{pad}{func:indent$}"),
-            Decl::Var(var) => write!(f, "{pad}{var:indent$}"),
+            Self::Func(func) => write!(f, "{pad}{func:indent$}"),
+            Self::Var(var) => write!(f, "{pad}{var:indent$}"),
         }
     }
 }
@@ -312,29 +309,29 @@ impl Decl {
 
     fn resolve_switch_statements(self) -> anyhow::Result<Self> {
         Ok(match self {
-            Decl::Func(func_decl) => Self::Func(func_decl.resolve_switch_statements()?),
-            Decl::Var(_) => self,
+            Self::Func(func_decl) => Self::Func(func_decl.resolve_switch_statements()?),
+            Self::Var(_) => self,
         })
     }
 
     fn resolve_goto_labels(self) -> anyhow::Result<Self> {
         Ok(match self {
-            Decl::Func(func_decl) => Self::Func(func_decl.resolve_goto_labels()?),
-            Decl::Var(_) => self,
+            Self::Func(func_decl) => Self::Func(func_decl.resolve_goto_labels()?),
+            Self::Var(_) => self,
         })
     }
 
     fn resolve_loop_labels(self) -> anyhow::Result<Self> {
         Ok(match self {
-            Decl::Func(func_decl) => Self::Func(func_decl.resolve_loop_labels()?),
-            Decl::Var(_) => self,
+            Self::Func(func_decl) => Self::Func(func_decl.resolve_loop_labels()?),
+            Self::Var(_) => self,
         })
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct VarDecl {
-    pub name: Ecow,
+    pub name: Identifier,
     pub init: Option<TypedExpr>,
     pub sc: StorageClass,
     pub var_type: Type,
@@ -354,7 +351,7 @@ impl Display for VarDecl {
 }
 impl VarDecl {
     fn type_check_file(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
-        let mut init = match self.init.clone() {
+        let mut init = match self.init {
             Some(TypedExpr { expr: Expr::Const(cnst), .. }) => {
                 Initial(cnst.into_static_init(&self.var_type))
             }
@@ -481,14 +478,14 @@ impl VarDecl {
         let init =
             if let Some(init) = self.init { Some(init.resolve_identifiers(map)?) } else { None };
 
-        Ok(VarDecl { name, init, sc, var_type: self.var_type })
+        Ok(Self { name, init, sc, var_type: self.var_type })
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct FuncDecl {
-    pub name: Ecow,
-    pub params: Vec<Ecow>,
+    pub name: Identifier,
+    pub params: Vec<Identifier>,
     pub body: Option<Block>,
     pub sc: StorageClass,
     pub fun_type: Type,
@@ -562,11 +559,11 @@ impl FuncDecl {
         );
 
         let body = if let Some(body) = self.body {
-            for (param, ty) in self.params.clone().iter().zip(arg_types) {
+            for (param, ty) in self.params.iter().zip(arg_types) {
                 symbols.insert(param.clone(), TypeCtx { type_: ty, attr: Local });
             }
 
-            Some(body.type_check(symbols, *ret_type)?)
+            Some(body.type_check(symbols, &ret_type)?)
         } else {
             None
         };
@@ -618,9 +615,9 @@ impl FuncDecl {
 
     fn resolve_goto_labels(self) -> anyhow::Result<Self> {
         // labels are function level
-        let mut label_map = FxHashMap::default();
+        let mut label_map = IndexMap::default();
         let body = match self.body {
-            Some(body) => Some(body.resolve_goto_labels(&mut label_map, self.name.clone())?),
+            Some(body) => Some(body.resolve_goto_labels(&mut label_map, &self.name)?),
             None => None,
         };
 
@@ -639,7 +636,7 @@ impl FuncDecl {
 
     fn resolve_loop_labels(self) -> anyhow::Result<Self> {
         let body = match self.body {
-            Some(body) => Some(body.resolve_loop_labels(LoopKind::None)?),
+            Some(body) => Some(body.resolve_loop_labels(&LoopKind::None)?),
             None => None,
         };
 
@@ -678,8 +675,8 @@ impl Display for BlockItem {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let indent = f.width().unwrap_or_default();
         match self {
-            BlockItem::S(stmt) => write!(f, "{stmt:indent$}"),
-            BlockItem::D(decl) => write!(f, "{decl:indent$}"),
+            Self::S(stmt) => write!(f, "{stmt:indent$}"),
+            Self::D(decl) => write!(f, "{decl:indent$}"),
         }
     }
 }
@@ -694,7 +691,7 @@ impl BlockItem {
     fn resolve_goto_labels(
         self,
         labels: &mut Namespace<bool>,
-        func_name: Ecow,
+        func_name: Identifier,
     ) -> anyhow::Result<Self> {
         match self {
             Self::S(stmt) => Ok(Self::S(stmt.resolve_goto_labels(labels, func_name)?)),
@@ -732,7 +729,7 @@ impl BlockItem {
     }
 }
 
-type SwitchCtx<'s> = Option<&'s mut FxHashSet<Option<Const>>>;
+type SwitchCtx<'s> = Option<&'s mut IndexSet<Option<Const>, foldhash::fast::RandomState>>;
 
 #[derive(Debug, Clone)]
 pub struct Block(pub Vec<BlockItem>);
@@ -750,7 +747,7 @@ impl Block {
     fn resolve_goto_labels(
         self,
         labels: &mut Namespace<bool>,
-        func_name: Ecow,
+        func_name: &Identifier,
     ) -> anyhow::Result<Self> {
         let mut acc = Vec::with_capacity(self.0.len());
         for bi in self.0 {
@@ -761,7 +758,7 @@ impl Block {
         Ok(Self(acc))
     }
 
-    fn resolve_loop_labels(self, current_label: LoopKind) -> anyhow::Result<Self> {
+    fn resolve_loop_labels(self, current_label: &LoopKind) -> anyhow::Result<Self> {
         let mut acc = Vec::with_capacity(self.0.len());
 
         for bi in self.0 {
@@ -797,7 +794,7 @@ impl Block {
     fn type_check(
         self,
         symbols: &mut Namespace<TypeCtx>,
-        enclosing_func_ret: Type,
+        enclosing_func_ret: &Type,
     ) -> anyhow::Result<Self> {
         let mut acc = Vec::with_capacity(self.0.len());
 
@@ -812,54 +809,52 @@ impl Block {
 
 #[derive(Debug, Clone)]
 enum LoopKind {
-    Loop(Ecow),
-    Switch(Ecow),
-    SwitchInLoop { loop_: Ecow, switch: Ecow },
-    LoopInSwitch { loop_: Ecow, switch: Ecow },
+    Loop(Identifier),
+    Switch(Identifier),
+    SwitchInLoop { loop_: Identifier, switch: Identifier },
+    LoopInSwitch { loop_: Identifier, switch: Identifier },
     None,
 }
 impl LoopKind {
-    fn break_label(&self) -> Option<Ecow> {
+    fn break_label(&self) -> Option<Identifier> {
         match self {
-            LoopKind::Loop(n)
-            | LoopKind::Switch(n)
-            | LoopKind::SwitchInLoop { switch: n, .. }
-            | LoopKind::LoopInSwitch { loop_: n, .. } => Some(n.clone()),
-            LoopKind::None => None,
+            Self::Loop(n)
+            | Self::Switch(n)
+            | Self::SwitchInLoop { switch: n, .. }
+            | Self::LoopInSwitch { loop_: n, .. } => Some(n.clone()),
+            Self::None => None,
         }
     }
-    fn loop_label(&self) -> Option<Ecow> {
+    fn loop_label(&self) -> Option<Identifier> {
         match self {
-            LoopKind::Loop(n)
-            | LoopKind::SwitchInLoop { loop_: n, .. }
-            | LoopKind::LoopInSwitch { loop_: n, .. } => Some(n.clone()),
-            LoopKind::None | LoopKind::Switch(_) => None,
+            Self::Loop(n)
+            | Self::SwitchInLoop { loop_: n, .. }
+            | Self::LoopInSwitch { loop_: n, .. } => Some(n.clone()),
+            Self::None | Self::Switch(_) => None,
         }
     }
-    fn switch_label(&self) -> Option<Ecow> {
+    fn switch_label(&self) -> Option<Identifier> {
         match self {
-            LoopKind::Switch(n)
-            | LoopKind::SwitchInLoop { switch: n, .. }
-            | LoopKind::LoopInSwitch { switch: n, .. } => Some(n.clone()),
-            LoopKind::None | LoopKind::Loop(_) => None,
+            Self::Switch(n)
+            | Self::SwitchInLoop { switch: n, .. }
+            | Self::LoopInSwitch { switch: n, .. } => Some(n.clone()),
+            Self::None | Self::Loop(_) => None,
         }
     }
-    fn into_switch(self, label: Ecow) -> Self {
+    fn into_switch(self, label: Identifier) -> Self {
         match self {
-            LoopKind::SwitchInLoop { loop_, .. }
-            | LoopKind::LoopInSwitch { loop_, .. }
-            | LoopKind::Loop(loop_) => LoopKind::SwitchInLoop { loop_, switch: label },
-            LoopKind::Switch(_) | LoopKind::None => LoopKind::Switch(label),
+            Self::SwitchInLoop { loop_, .. }
+            | Self::LoopInSwitch { loop_, .. }
+            | Self::Loop(loop_) => Self::SwitchInLoop { loop_, switch: label },
+            Self::Switch(_) | Self::None => Self::Switch(label),
         }
     }
-    fn into_loop(self, label: Ecow) -> Self {
+    fn into_loop(self, label: Identifier) -> Self {
         match self {
-            LoopKind::SwitchInLoop { switch, .. }
-            | LoopKind::Switch(switch)
-            | LoopKind::LoopInSwitch { switch, .. } => {
-                LoopKind::LoopInSwitch { loop_: label, switch }
-            }
-            LoopKind::None | LoopKind::Loop(_) => LoopKind::Loop(label),
+            Self::SwitchInLoop { switch, .. }
+            | Self::Switch(switch)
+            | Self::LoopInSwitch { switch, .. } => Self::LoopInSwitch { loop_: label, switch },
+            Self::None | Self::Loop(_) => Self::Loop(label),
         }
     }
 }
@@ -876,17 +871,17 @@ pub enum Stmt {
 
     Compound(Block),
 
-    Break(Option<Ecow>),
-    Continue(Option<Ecow>),
+    Break(Option<Identifier>),
+    Continue(Option<Identifier>),
     While {
         cond: TypedExpr,
         body: Box<Stmt>,
-        label: Option<Ecow>,
+        label: Option<Identifier>,
     },
     DoWhile {
         body: Box<Stmt>,
         cond: TypedExpr,
-        label: Option<Ecow>,
+        label: Option<Identifier>,
     },
     For {
         init: Either<VarDecl, Option<TypedExpr>>,
@@ -894,27 +889,27 @@ pub enum Stmt {
         post: Option<TypedExpr>,
 
         body: Box<Stmt>,
-        label: Option<Ecow>,
+        label: Option<Identifier>,
     },
 
     // extra credit
-    GoTo(Ecow),
-    Label(Ecow, Box<Stmt>),
+    GoTo(Identifier),
+    Label(Identifier, Box<Stmt>),
 
     Switch {
         ctrl: TypedExpr,
         body: Box<Stmt>,
-        label: Option<Ecow>,
+        label: Option<Identifier>,
         cases: Vec<Option<Const>>,
     },
     Case {
         cnst: TypedExpr,
         body: Box<Stmt>,
-        label: Option<Ecow>,
+        label: Option<Identifier>,
     },
     Default {
         body: Box<Stmt>,
-        label: Option<Ecow>,
+        label: Option<Identifier>,
     },
 
     Null,
@@ -924,17 +919,17 @@ impl Display for Stmt {
         let indent = f.width().unwrap_or_default();
         let child = indent + 1;
 
-        let pad = Ecow::from("\t").repeat(indent);
+        let pad = Identifier::from("\t").repeat(indent);
 
-        let write_body = |body: &Stmt, f: &mut Formatter| match body {
-            Stmt::Compound(_) => write!(f, "{body:indent$}"),
+        let write_body = |body: &Self, f: &mut Formatter| match body {
+            Self::Compound(_) => write!(f, "{body:indent$}"),
             _ => write!(f, "{body:child$}"),
         };
 
         match self {
-            Stmt::Return(expr) => write!(f, "{pad}return  {expr}"),
-            Stmt::Expression(expr) => write!(f, "{pad}{expr}"),
-            Stmt::If { cond, then, else_ } => {
+            Self::Return(expr) => write!(f, "{pad}return  {expr}"),
+            Self::Expression(expr) => write!(f, "{pad}{expr}"),
+            Self::If { cond, then, else_ } => {
                 writeln!(f, "{pad}if {cond}")?;
                 write_body(then, f)?;
                 if let Some(else_) = else_ {
@@ -944,25 +939,25 @@ impl Display for Stmt {
                     Ok(())
                 }
             }
-            Stmt::Compound(block) => {
+            Self::Compound(block) => {
                 for item in &block.0 {
                     writeln!(f, "{item:child$}")?;
                 }
                 Ok(())
             }
 
-            Stmt::Break(_) => writeln!(f, "{pad}break"),
-            Stmt::Continue(_) => writeln!(f, "{pad}continue"),
-            Stmt::While { cond, body, .. } => {
+            Self::Break(_) => writeln!(f, "{pad}break"),
+            Self::Continue(_) => writeln!(f, "{pad}continue"),
+            Self::While { cond, body, .. } => {
                 writeln!(f, "{pad}while {cond}")?;
                 write_body(body, f)
             }
-            Stmt::DoWhile { body, cond, .. } => {
+            Self::DoWhile { body, cond, .. } => {
                 writeln!(f, "{pad}do")?;
                 write_body(body, f)?;
                 writeln!(f, "{pad}while {cond}")
             }
-            Stmt::For { init, cond, post, body, .. } => {
+            Self::For { init, cond, post, body, .. } => {
                 write!(f, "{pad}for ")?;
 
                 match init {
@@ -983,24 +978,24 @@ impl Display for Stmt {
                 writeln!(f)?;
                 write_body(body, f)
             }
-            Stmt::GoTo(name) => write!(f, "{pad}goto {name}"),
-            Stmt::Label(name, body) => {
+            Self::GoTo(name) => write!(f, "{pad}goto {name}"),
+            Self::Label(name, body) => {
                 writeln!(f, "{pad}label {name}:")?;
                 write_body(body, f)
             }
-            Stmt::Switch { ctrl, body, .. } => {
+            Self::Switch { ctrl, body, .. } => {
                 writeln!(f, "{pad}switch {ctrl}:")?;
                 write_body(body, f)
             }
-            Stmt::Case { cnst, body, .. } => {
+            Self::Case { cnst, body, .. } => {
                 writeln!(f, "{pad}case {cnst}:")?;
                 write_body(body, f)
             }
-            Stmt::Default { body, .. } => {
+            Self::Default { body, .. } => {
                 writeln!(f, "{pad}default:")?;
                 write_body(body, f)
             }
-            Stmt::Null => Ok(()),
+            Self::Null => Ok(()),
         }
     }
 }
@@ -1041,13 +1036,13 @@ impl Stmt {
                 let cond = cond.resolve_identifiers(map)?;
                 let body = Box::new(body.resolve_identifiers(map)?);
 
-                Ok(Self::While { cond, body, label: label.clone() })
+                Ok(Self::While { cond, body, label })
             }
             Self::DoWhile { cond, body, label } => {
                 let cond = cond.resolve_identifiers(map)?;
                 let body = Box::new(body.resolve_identifiers(map)?);
 
-                Ok(Self::DoWhile { cond, body, label: label.clone() })
+                Ok(Self::DoWhile { cond, body, label })
             }
             Self::For { init, cond, post, body, label } => {
                 let mut for_map = map
@@ -1073,7 +1068,7 @@ impl Stmt {
 
                 let body = Box::new(body.resolve_identifiers(&mut for_map)?);
 
-                Ok(Self::For { init, cond, post, body, label: label.clone() })
+                Ok(Self::For { init, cond, post, body, label })
             }
 
             Self::Switch { ctrl, body, label, cases } => {
@@ -1098,7 +1093,7 @@ impl Stmt {
     fn resolve_goto_labels(
         self,
         labels: &mut Namespace<bool>,
-        func_name: Ecow,
+        func_name: Identifier,
     ) -> anyhow::Result<Self> {
         let mangle_label = |label| eco_format!("{func_name}.{}", label);
         match self {
@@ -1131,7 +1126,7 @@ impl Stmt {
                 Ok(Self::If { cond, then, else_ })
             }
             Self::Compound(block) => {
-                Ok(Self::Compound(block.resolve_goto_labels(labels, func_name)?))
+                Ok(Self::Compound(block.resolve_goto_labels(labels, &func_name)?))
             }
             any @ (Self::Return(_)
             | Self::Null
@@ -1181,10 +1176,12 @@ impl Stmt {
 
         match self {
             Self::Break(_) => Ok(Self::Break(Some(
-                current_label.break_label().ok_or(anyhow::anyhow!("not a break label"))?,
+                current_label.break_label().ok_or_else(|| anyhow::anyhow!("not a break label"))?,
             ))),
             Self::Continue(_) => Ok(Self::Continue(Some(
-                current_label.loop_label().ok_or(anyhow::anyhow!("not a continue label"))?,
+                current_label
+                    .loop_label()
+                    .ok_or_else(|| anyhow::anyhow!("not a continue label"))?,
             ))),
 
             Self::While { cond, body, .. } => {
@@ -1231,7 +1228,7 @@ impl Stmt {
 
                 Ok(Self::If { cond, then, else_ })
             }
-            Self::Compound(block) => Ok(Self::Compound(block.resolve_loop_labels(current_label)?)),
+            Self::Compound(block) => Ok(Self::Compound(block.resolve_loop_labels(&current_label)?)),
             Self::Label(label, stmt) => {
                 let stmt = Box::new(stmt.resolve_loop_labels(current_label)?);
                 Ok(Self::Label(label, stmt))
@@ -1286,9 +1283,9 @@ impl Stmt {
                 let switch_type = ctrl
                     .clone()
                     .type_
-                    .ok_or(anyhow::anyhow!("switch type must be kbown at this point"))?;
+                    .ok_or_else(|| anyhow::anyhow!("switch type must be kbown at this point"))?;
 
-                let mut switchctx = FxHashSet::default();
+                let mut switchctx = IndexSet::default();
                 let body =
                     Box::new(body.resolve_switch_statements(Some(&mut switchctx), &switch_type)?);
 
@@ -1297,7 +1294,8 @@ impl Stmt {
                 Self::Switch { ctrl, body, label, cases }
             }
             Self::Case { cnst, body, label } => {
-                let switch_ctx = switch_ctx.ok_or(anyhow::anyhow!("case outside of a switch"))?;
+                let switch_ctx =
+                    switch_ctx.ok_or_else(|| anyhow::anyhow!("case outside of a switch"))?;
 
                 let Expr::Const(value) = cnst.expr else {
                     anyhow::bail!("case value not a constant");
@@ -1315,7 +1313,7 @@ impl Stmt {
             }
             Self::Default { body, label } => {
                 let switch_ctx =
-                    switch_ctx.ok_or(anyhow::anyhow!("default outside of a switch"))?;
+                    switch_ctx.ok_or_else(|| anyhow::anyhow!("default outside of a switch"))?;
 
                 if !switch_ctx.insert(None) {
                     anyhow::bail!("cdefault case already exists");
@@ -1354,7 +1352,9 @@ impl Stmt {
                     None => None,
                 },
             },
-            Self::Compound(block) => Self::Compound(block.type_check(symbols, enclosing_func_ret)?),
+            Self::Compound(block) => {
+                Self::Compound(block.type_check(symbols, &enclosing_func_ret)?)
+            }
             Self::While { cond, body, label } => Self::While {
                 cond: cond.type_check(symbols)?,
                 body: Box::new(body.type_check(symbols, enclosing_func_ret)?),
@@ -1391,7 +1391,7 @@ impl Stmt {
             Self::Switch { ctrl, body, label, cases } => {
                 let ctrl = ctrl.type_check(symbols)?;
                 anyhow::ensure!(matches!(
-                    ctrl.clone().type_,
+                    ctrl.type_,
                     Some(Type::Int | Type::UInt | Type::Long | Type::ULong)
                 ));
 
@@ -1405,7 +1405,7 @@ impl Stmt {
             Self::Case { cnst, body, label } => {
                 let cnst = cnst.type_check(symbols)?;
                 anyhow::ensure!(matches!(
-                    cnst.clone().type_,
+                    cnst.type_,
                     Some(Type::Int | Type::UInt | Type::Long | Type::ULong)
                 ));
                 Self::Case {
@@ -1449,8 +1449,8 @@ impl TypedExpr {
         self.expr.is_null_pointer_constant()
     }
     fn common_ptr_type(&self, other: &Self) -> anyhow::Result<Type> {
-        let e1_t = self.type_.clone().ok_or(anyhow::anyhow!("type should be known"))?;
-        let e2_t = other.type_.clone().ok_or(anyhow::anyhow!("type should be known"))?;
+        let e1_t = self.type_.clone().ok_or_else(|| anyhow::anyhow!("type should be known"))?;
+        let e2_t = other.type_.clone().ok_or_else(|| anyhow::anyhow!("type should be known"))?;
 
         match () {
             _ if e1_t == e2_t => Ok(e1_t),
@@ -1484,14 +1484,14 @@ impl TypedExpr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Const(Const),
-    Var(Ecow),
+    Var(Identifier),
     Cast { target: Type, inner: Box<TypedExpr> },
     Unary(UnaryOp, Box<TypedExpr>),
     Binary { op: BinaryOp, lhs: Box<TypedExpr>, rhs: Box<TypedExpr> },
     CompoundAssignment { op: BinaryOp, lhs: Box<TypedExpr>, rhs: Box<TypedExpr> },
     Assignemnt(Box<TypedExpr>, Box<TypedExpr>),
     Conditional { cond: Box<TypedExpr>, then: Box<TypedExpr>, else_: Box<TypedExpr> },
-    FuncCall { name: Ecow, args: Vec<TypedExpr> },
+    FuncCall { name: Identifier, args: Vec<TypedExpr> },
     Deref(Box<TypedExpr>),
     AddrOf(Box<TypedExpr>),
 }
@@ -1509,7 +1509,7 @@ impl Display for Expr {
                 write!(f, "({cond} ? {then} : {else_})")
             }
             Self::FuncCall { name, args } => {
-                let mut buf = Ecow::new();
+                let mut buf = Identifier::new();
                 for (idx, arg) in args.iter().enumerate() {
                     write!(buf, "{}{arg}", if idx != 0 { ", " } else { "" })?;
                 }
@@ -1568,11 +1568,11 @@ impl Expr {
                 .get(&var)
                 .cloned()
                 .map(|t| Self::Var(t.name))
-                .ok_or(anyhow::anyhow!("variable does not exist in map"))?,
+                .ok_or_else(|| anyhow::anyhow!("variable does not exist in map"))?,
             Self::FuncCall { name, args } => {
                 let name = map
                     .get(&name)
-                    .ok_or(anyhow::anyhow!("function does not exist in map"))?
+                    .ok_or_else(|| anyhow::anyhow!("function does not exist in map"))?
                     .clone()
                     .name;
                 let mut resolved_args = Vec::with_capacity(args.len());
@@ -1601,7 +1601,7 @@ impl Expr {
                 let to = Box::new(
                     expr.type_
                         .clone()
-                        .ok_or(anyhow::anyhow!("type must be known at this point"))?,
+                        .ok_or_else(|| anyhow::anyhow!("type must be known at this point"))?,
                 );
 
                 Ok(Self::AddrOf(expr).typed(Type::Pointer { to }))
@@ -1617,7 +1617,7 @@ impl Expr {
             Self::FuncCall { name, args } => {
                 let (types, ret) = match &symbols
                     .get(&name)
-                    .ok_or(anyhow::anyhow!("function does not exist in symbol map"))?
+                    .ok_or_else(|| anyhow::anyhow!("function does not exist in symbol map"))?
                     .type_
                 {
                     Type::Func { params, .. } if params.len() != args.len() => {
@@ -1680,8 +1680,7 @@ impl Expr {
 
                 let common_type = match (&lhs_t, &rhs_t) {
                     (Type::Pointer { .. }, _) | (_, Type::Pointer { .. }) => {
-                       lhs.common_ptr_type(&rhs)?
-
+                        lhs.common_ptr_type(&rhs)?
                     }
                     _ => lhs_t.get_common_type(rhs_t),
                 };
@@ -1701,14 +1700,14 @@ impl Expr {
                         return Ok(Self::Binary { op, lhs, rhs }.typed(Type::Int));
                     }
                     BinaryOp::Reminder
-                        if !(lhs.type_.as_ref().is_some_and(|t| t.is_intish())
-                            && rhs.type_.as_ref().is_some_and(|t| t.is_intish())) =>
+                        if !(lhs.type_.as_ref().is_some_and(Type::is_intish)
+                            && rhs.type_.as_ref().is_some_and(Type::is_intish)) =>
                     {
                         anyhow::bail!("cannot modulo a double or a pointer")
                     }
                     BinaryOp::Multiply | BinaryOp::Divide
-                        if !(lhs.type_.as_ref().is_some_and(|t| t.is_arithmatic())
-                            && rhs.type_.as_ref().is_some_and(|t| t.is_arithmatic())) =>
+                        if !(lhs.type_.as_ref().is_some_and(Type::is_arithmatic)
+                            && rhs.type_.as_ref().is_some_and(Type::is_arithmatic)) =>
                     {
                         anyhow::bail!("cannot mulyiply a pointer")
                     }
@@ -1815,11 +1814,11 @@ impl Expr {
 
                 let rhs = Box::new(rhs.cast_to_type(common.clone()));
 
-                let ret = if matches!(lhs_cast.expr, Expr::Cast { .. }) {
+                let ret = if matches!(lhs_cast.expr, Self::Cast { .. }) {
                     // this is probably wrong
                     Self::Assignemnt(
                         lhs,
-                        Box::new(Expr::Binary { op, lhs: lhs_cast, rhs }.typed(common)),
+                        Box::new(Self::Binary { op, lhs: lhs_cast, rhs }.typed(common)),
                     )
                 } else {
                     Self::CompoundAssignment { op, lhs: lhs_cast, rhs }
@@ -1904,11 +1903,11 @@ impl Hash for Const {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         core::mem::discriminant(self).hash(state);
         match self {
-            Const::Int(i) => i.hash(state),
-            Const::Long(i) => i.hash(state),
-            Const::UInt(i) => i.hash(state),
-            Const::ULong(i) => i.hash(state),
-            Const::Double(_) => {}
+            Self::Int(i) => i.hash(state),
+            Self::Long(i) => i.hash(state),
+            Self::UInt(i) => i.hash(state),
+            Self::ULong(i) => i.hash(state),
+            Self::Double(_) => {}
         }
     }
 }
@@ -1968,7 +1967,7 @@ impl Const {
         }
     }
     fn is_null_pointer_constant(&self) -> bool {
-        matches!(self, Const::Int(0) | Const::Long(0) | Const::UInt(0) | Const::ULong(0))
+        matches!(self, Self::Int(0) | Self::Long(0) | Self::UInt(0) | Self::ULong(0))
     }
 }
 

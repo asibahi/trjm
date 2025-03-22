@@ -4,7 +4,7 @@ use crate::{
     ast::*,
     lexer::{IntFlags, Token, Tokens},
 };
-use ecow::EcoString as Ecow;
+use ecow::EcoString as Identifier;
 use either::Either::{self, Left, Right};
 use nom::{
     Finish, Parser,
@@ -55,18 +55,17 @@ fn parse_var_decl(i: Tokens<'_>) -> ParseResult<'_, VarDecl> {
 }
 
 fn parse_decl(i: Tokens<'_>) -> ParseResult<'_, Decl> {
-    let (i, (ret, sc)) = parse_specifiers.parse_complete(i)?;
+    let (i, (base_type, sc)) = parse_specifiers.parse_complete(i)?;
 
-    let (i, (name, decl_type, param_names)) = parse_declarator
-        .map_opt(|declarator| process_declarator(declarator, ret.clone()))
-        .parse_complete(i)?;
+    let (i, (name, decl_type, params)) =
+        parse_declarator.map_opt(|d| process_declarator(d, base_type.clone())).parse_complete(i)?;
 
     let result = match decl_type {
         Type::Func { .. } => {
             let (i, body) =
                 parse_block.map(Some).or(tag_token!(Token::Semicolon => None)).parse_complete(i)?;
 
-            (i, Decl::Func(FuncDecl { name, params: param_names, body, sc, fun_type: decl_type }))
+            (i, Decl::Func(FuncDecl { name, params, body, sc, fun_type: decl_type }))
         }
         _ => {
             let (i, init) = terminated(
@@ -83,7 +82,7 @@ fn parse_decl(i: Tokens<'_>) -> ParseResult<'_, Decl> {
 }
 
 enum Declarator {
-    Ident(Ecow),
+    Ident(Identifier),
     Pointer(Box<Declarator>),
     Func(Vec<ParamInfo>, Box<Declarator>),
 }
@@ -94,52 +93,40 @@ struct ParamInfo {
 }
 
 fn parse_param_info(i: Tokens<'_>) -> ParseResult<'_, Vec<ParamInfo>> {
-    delimited(
-        tag_token!(Token::ParenOpen),
-        alt((
-            tag_token!(Token::Void => Vec::new()),
-            separated_list1(
-                tag_token!(Token::Comma),
-                parse_base_type
-                    .and(parse_declarator)
-                    .map(|(type_, declarator)| ParamInfo { type_, declarator }),
-            ),
-        )),
-        tag_token!(Token::ParenClose),
-    )
+    parenthesized(alt((
+        tag_token!(Token::Void => Vec::new()),
+        separated_list1(
+            tag_token!(Token::Comma),
+            parse_base_type
+                .and(parse_declarator)
+                .map(|(type_, declarator)| ParamInfo { type_, declarator }),
+        ),
+    )))
     .parse_complete(i)
 }
 
 fn parse_declarator(i: Tokens<'_>) -> ParseResult<'_, Declarator> {
     precedence(
-        // prefix: pointer
         unary_op(2, tag_token!(Token::Astrisk => ())),
-        // postfix : function
         unary_op(1, parse_param_info),
-        // infix, inapplicable
         fail(),
-        // operands
-        alt((
-            delimited(
-                tag_token!(Token::ParenOpen),
-                parse_declarator,
-                tag_token!(Token::ParenClose),
-            ),
-            parse_ident.map(Declarator::Ident),
-        )),
-        // fold function
-        |op: Operation<_, _, (), _>| -> Result<Declarator, ()> {
+        parenthesized(parse_declarator).or(parse_ident.map(Declarator::Ident)),
+        |op| {
             let ret = match op {
                 Operation::Prefix((), d) => Declarator::Pointer(Box::new(d)),
                 Operation::Postfix(d, params) => Declarator::Func(params, Box::new(d)),
-                Operation::Binary(_, _, _) => return Err(()),
+                Operation::Binary(_, (), _) => return Err(()),
             };
             Ok(ret)
         },
-    )(i)
+    )
+    .parse_complete(i)
 }
 
-fn process_declarator(declarator: Declarator, base: Type) -> Option<(Ecow, Type, Vec<Ecow>)> {
+fn process_declarator(
+    declarator: Declarator,
+    base: Type,
+) -> Option<(Identifier, Type, Vec<Identifier>)> {
     match declarator {
         Declarator::Ident(name) => Some((name, base, Vec::new())),
         Declarator::Pointer(declarator) => {
@@ -184,36 +171,28 @@ fn parse_base_type(i: Tokens<'_>) -> ParseResult<'_, Type> {
     .map_opt(|list: Vec<_>| {
         use Token::*;
 
+        let has_dupes = (0..list.len())
+            .flat_map(|i| (i + 1..list.len()).map(move |j| (i, j)))
+            .any(|(i, j)| list[i] == list[j]);
+
+        let unsigned = list.contains(&Unsigned);
+
         if list == vec![Double] {
-            return Some(Type::Double);
-        } else if list.contains(&Double) {
-            return None;
+            Some(Type::Double)
+        } else if list.contains(&Double)
+            || list.is_empty()
+            || has_dupes
+            || (list.contains(&Signed) && unsigned)
+        {
+            None
+        } else {
+            Some(match (unsigned, list.contains(&Long)) {
+                (true, true) => Type::ULong,
+                (true, false) => Type::UInt,
+                (false, true) => Type::Long,
+                (false, false) => Type::Int,
+            })
         }
-
-        let has_dupes = 'dupes: {
-            for i in 0..list.len() {
-                for j in i + 1..list.len() {
-                    if list[i] == list[j] {
-                        break 'dupes true;
-                    }
-                }
-            }
-            false
-        };
-
-        if list.is_empty() || has_dupes || (list.contains(&Signed) && list.contains(&Unsigned)) {
-            return None;
-        }
-
-        let u = list.contains(&Unsigned);
-        let l = list.contains(&Long);
-
-        Some(match (u, l) {
-            (true, true) => Type::ULong,
-            (true, false) => Type::UInt,
-            (false, true) => Type::Long,
-            (false, false) => Type::Int,
-        })
     })
     .parse_complete(i)
 }
@@ -262,7 +241,7 @@ fn parse_block(i: Tokens<'_>) -> ParseResult<'_, Block> {
     .parse_complete(i)
 }
 
-fn parse_ident(i: Tokens<'_>) -> ParseResult<'_, Ecow> {
+fn parse_ident(i: Tokens<'_>) -> ParseResult<'_, Identifier> {
     tag_token!(Token::Ident(_)).map_opt(|t: Tokens<'_>| t.0[0].unwrap_ident()).parse_complete(i)
 }
 
@@ -274,12 +253,12 @@ fn parse_stmt(i: Tokens<'_>) -> ParseResult<'_, Stmt> {
     let if_else = preceded(
         tag_token!(Token::If),
         (
-            delimited(tag_token!(Token::ParenOpen), parse_expr, tag_token!(Token::ParenClose)),
+            parenthesized(parse_expr),
             parse_stmt.map(Box::new),
             opt(preceded(tag_token!(Token::Else), parse_stmt).map(Box::new)),
-        )
-            .map(|(cond, then, else_)| Stmt::If { cond, then, else_ }),
-    );
+        ),
+    )
+    .map(|(cond, then, else_)| Stmt::If { cond, then, else_ });
 
     let compound = parse_block.map(Stmt::Compound);
 
@@ -351,6 +330,72 @@ fn parse_stmt(i: Tokens<'_>) -> ParseResult<'_, Stmt> {
     .parse_complete(i)
 }
 
+#[derive(Debug, Clone)]
+enum AbstractDeclarator {
+    Pointer(Box<AbstractDeclarator>),
+    Base,
+}
+
+fn parse_abstract_declarator(i: Tokens<'_>) -> ParseResult<'_, AbstractDeclarator> {
+    precedence(
+        unary_op(2, tag_token!(Token::Astrisk => ())),
+        fail(),
+        fail(),
+        parenthesized(parse_abstract_declarator).or(success(AbstractDeclarator::Base)),
+        |op| match op {
+            Operation::Prefix((), d) => Ok(AbstractDeclarator::Pointer(Box::new(d))),
+            Operation::Postfix(_, ()) | Operation::Binary(_, (), _) => Err(()),
+        },
+    )
+    .parse_complete(i)
+}
+
+fn process_abstract_declarator(declarator: AbstractDeclarator, base: Type) -> Type {
+    match declarator {
+        AbstractDeclarator::Pointer(declarator) => {
+            let derived = Type::Pointer { to: Box::new(base) };
+            process_abstract_declarator(*declarator, derived)
+        }
+        AbstractDeclarator::Base => base,
+    }
+}
+
+fn parse_prefixes(i: Tokens<'_>) -> ParseResult<'_, Unary<Either<UnaryOp, Type>, i32>> {
+    alt((
+        unary_op(2, tag_token!(Token::Hyphen => UnaryOp::Negate).map(Left)),
+        unary_op(2, tag_token!(Token::Tilde => UnaryOp::Complement).map(Left)),
+        unary_op(2, tag_token!(Token::Bang => UnaryOp::Not).map(Left)),
+        unary_op(2, tag_token!(Token::Plus => UnaryOp::Plus).map(Left)),
+        // chapter 5 extra credit
+        unary_op(2, tag_token!(Token::DblPlus => UnaryOp::IncPre).map(Left)),
+        unary_op(2, tag_token!(Token::DblHyphen => UnaryOp::DecPre).map(Left)),
+        // chapter 11 cast operation // also chapter 14 declarators
+        unary_op(
+            2,
+            parenthesized(
+                parse_base_type
+                    .and(parse_abstract_declarator)
+                    .map(|(ty, de)| process_abstract_declarator(de, ty)),
+            )
+            .map(Right),
+        ),
+        // chapter 14 pointers
+        unary_op(2, tag_token!(Token::Ambersand => UnaryOp::AddressOf).map(Left)),
+        unary_op(2, tag_token!(Token::Astrisk => UnaryOp::Dereference).map(Left)),
+    ))
+    .parse_complete(i)
+}
+
+fn parse_postfixes(i: Tokens<'_>) -> ParseResult<'_, Unary<UnaryOp, i32>> {
+    // chapter 5 extra credit
+
+    alt((
+        unary_op(1, tag_token!(Token::DblPlus => UnaryOp::IncPost)),
+        unary_op(1, tag_token!(Token::DblHyphen => UnaryOp::DecPost)),
+    ))
+    .parse_complete(i)
+}
+
 enum BinKind {
     Typical(BinaryOp),
     Ternary(TypedExpr),
@@ -374,83 +419,6 @@ macro_rules! binop {
             tag_token!(Token::$token => BinaryOp::$binop).map(CompoundAssignment),
         )
     };
-}
-
-#[derive(Debug, Clone)]
-enum AbstractDeclarator {
-    Pointer(Box<AbstractDeclarator>),
-    Base,
-}
-
-fn parse_abstract_declarator(i: Tokens<'_>) -> ParseResult<'_, AbstractDeclarator> {
-    precedence(
-        // pointer
-        unary_op(2, tag_token!(Token::Astrisk => ())),
-        fail(),
-        fail(),
-        alt((
-            delimited(
-                tag_token!(Token::ParenOpen),
-                parse_abstract_declarator,
-                tag_token!(Token::ParenClose),
-            ),
-            success(AbstractDeclarator::Base),
-        )),
-        |op: Operation<_, (), (), _>| -> Result<AbstractDeclarator, ()> {
-            match op {
-                Operation::Prefix((), d) => Ok(AbstractDeclarator::Pointer(Box::new(d))),
-                Operation::Postfix(_, _) | Operation::Binary(_, _, _) => Err(()),
-            }
-        },
-    )(i)
-}
-
-fn process_abstract_declarator(declarator: AbstractDeclarator, base: Type) -> Option<Type> {
-    match declarator {
-        AbstractDeclarator::Pointer(declarator) => {
-            let derived = Type::Pointer { to: Box::new(base) };
-            process_abstract_declarator(*declarator, derived)
-        }
-        AbstractDeclarator::Base => Some(base),
-    }
-}
-
-fn parse_prefixes(i: Tokens<'_>) -> ParseResult<'_, Unary<Either<UnaryOp, Type>, i32>> {
-    alt((
-        unary_op(2, tag_token!(Token::Hyphen => Left(UnaryOp::Negate))),
-        unary_op(2, tag_token!(Token::Tilde => Left(UnaryOp::Complement))),
-        unary_op(2, tag_token!(Token::Bang => Left(UnaryOp::Not))),
-        unary_op(2, tag_token!(Token::Plus => Left(UnaryOp::Plus))),
-        // chapter 5 extra credit
-        unary_op(2, tag_token!(Token::DblPlus => Left(UnaryOp::IncPre))),
-        unary_op(2, tag_token!(Token::DblHyphen => Left(UnaryOp::DecPre))),
-        // chapter 11 cast operation // also chapter 14 declarators
-        unary_op(
-            2,
-            delimited(
-                tag_token!(Token::ParenOpen),
-                parse_base_type
-                    .and(parse_abstract_declarator)
-                    .map_opt(|(ty, de)| process_abstract_declarator(de, ty)),
-                tag_token!(Token::ParenClose),
-            )
-            .map(Right),
-        ),
-        // chapter 14 pointers // is this enough?
-        unary_op(2, tag_token!(Token::Ambersand => Left(UnaryOp::AddressOf))),
-        unary_op(2, tag_token!(Token::Astrisk => Left(UnaryOp::Dereference))),
-    ))
-    .parse_complete(i)
-}
-
-fn parse_postfixes(i: Tokens<'_>) -> ParseResult<'_, Unary<UnaryOp, i32>> {
-    // chapter 5 extra credit
-
-    alt((
-        unary_op(1, tag_token!(Token::DblPlus => UnaryOp::IncPost)),
-        unary_op(1, tag_token!(Token::DblHyphen => UnaryOp::DecPost)),
-    ))
-    .parse_complete(i)
 }
 
 fn parse_infixes(i: Tokens<'_>) -> ParseResult<'_, Binary<BinKind, i32>> {
@@ -507,29 +475,25 @@ fn parse_infixes(i: Tokens<'_>) -> ParseResult<'_, Binary<BinKind, i32>> {
     .parse_complete(i)
 }
 
-macro_rules! typed_const {
-    ($ty:tt, $i:expr) => {
-        Expr::Const(Const::$ty($i)).typed(Type::$ty)
-    };
-}
-
 fn parse_int_literal(i: Tokens<'_>) -> ParseResult<'_, TypedExpr> {
     tag_token!(Token::Integer(..))
         .map(|t: Tokens<'_>| {
             let Token::Integer(lit, ty) = t.0[0] else { unreachable!() };
 
-            match ty {
+            let c = match ty {
                 IntFlags::U => match u32::try_from(lit) {
-                    Ok(i) => typed_const!(UInt, i),
-                    Err(_) => typed_const!(ULong, lit),
+                    Ok(i) => Const::UInt(i),
+                    Err(_) => Const::ULong(lit),
                 },
-                IntFlags::UL => typed_const!(ULong, lit),
-                IntFlags::L => typed_const!(Long, lit as i64),
+                IntFlags::UL => Const::ULong(lit),
+                IntFlags::L => Const::Long(lit as i64),
                 IntFlags::NoFlags => match i32::try_from(lit) {
-                    Ok(i) => typed_const!(Int, i),
-                    Err(_) => typed_const!(Long, lit as i64),
+                    Ok(i) => Const::Int(i),
+                    Err(_) => Const::Long(lit as i64),
                 },
-            }
+            };
+
+            Expr::Const(c).dummy_typed()
         })
         .parse_complete(i)
 }
@@ -541,18 +505,14 @@ fn parse_operands(i: Tokens<'_>) -> ParseResult<'_, TypedExpr> {
         // const float
         tag_token!(Token::Float(_)).map(|tokens: Tokens<'_>| {
             let Token::Float(cnst) = &tokens.0[0] else { unreachable!() };
-            typed_const!(Double, *cnst)
+            Expr::Const(Const::Double(*cnst)).typed(Type::Double)
         }),
         // function call
         parse_ident
-            .and(delimited(
-                tag_token!(Token::ParenOpen),
-                separated_list0(tag_token!(Token::Comma), parse_expr),
-                tag_token!(Token::ParenClose),
-            ))
+            .and(parenthesized(separated_list0(tag_token!(Token::Comma), parse_expr)))
             .map(|(name, args)| Expr::FuncCall { name, args }.dummy_typed()),
         // group
-        delimited(tag_token!(Token::ParenOpen), parse_expr, tag_token!(Token::ParenClose)),
+        parenthesized(parse_expr),
         // variable
         parse_ident.map(Expr::Var).map(Expr::dummy_typed),
     ))
@@ -592,5 +552,13 @@ fn parse_expr(i: Tokens<'_>) -> ParseResult<'_, TypedExpr> {
             // apparently it is a bad idea to infer types here.
             .dummy_typed())
         },
-    )(i)
+    )
+    .parse_complete(i)
+}
+
+fn parenthesized<'a, P, O>(parser: P) -> impl Parser<Tokens<'a>, Output = O, Error = ParseError<'a>>
+where
+    P: Parser<Tokens<'a>, Output = O, Error = ParseError<'a>>,
+{
+    delimited(tag_token!(Token::ParenOpen), parser, tag_token!(Token::ParenClose))
 }

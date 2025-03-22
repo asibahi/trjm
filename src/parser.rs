@@ -539,9 +539,12 @@ fn parse_expr(i: Tokens<'_>) -> ParseResult<'_, TypedExpr> {
                 Binary(lhs, Typical(op), rhs) => {
                     Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }
                 }
-                Binary(lhs, CompoundAssignment(op), rhs) => {
-                    Expr::CompoundAssignment { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }
-                }
+                Binary(lhs, CompoundAssignment(op), rhs) => Expr::CompoundAssignment {
+                    op,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                    common: None,
+                },
                 Binary(lhs, Assignment, rhs) => Expr::Assignemnt(Box::new(lhs), Box::new(rhs)),
                 Binary(lhs, Ternary(op), rhs) => Expr::Conditional {
                     cond: Box::new(lhs),

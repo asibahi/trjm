@@ -508,8 +508,15 @@ impl ast::Expr {
             }
             Self::Var(id) => ExprResult::Plain(Value::Var(Place(id.clone()))),
             Self::Assignemnt(place, value) => {
+                let value = if place.type_ == value.type_ {
+                    value.to_ir_and_convert(instrs, symbols)
+                } else {
+                    ast::Expr::Cast { target: place.type_.clone().unwrap(), inner: value.clone() }
+                        .typed(place.type_.clone().unwrap())
+                        .to_ir_and_convert(instrs, symbols)
+                };
+
                 let place = place.to_ir(instrs, symbols);
-                let value = value.to_ir_and_convert(instrs, symbols);
 
                 match &place {
                     ExprResult::Plain(obj) => {
@@ -528,7 +535,10 @@ impl ast::Expr {
                 }
             }
 
-            Self::CompoundAssignment { op, lhs, rhs } => {
+            Self::CompoundAssignment { op, lhs, rhs, common } => {
+                let common = common.clone().unwrap();
+                let cast_op = common != *expr_type;
+
                 let lhs = lhs.to_ir(instrs, symbols);
                 let rhs = rhs.to_ir_and_convert(instrs, symbols);
                 let tmp = make_ir_variable("cmpd", expr_type.clone(), symbols);
@@ -536,12 +546,25 @@ impl ast::Expr {
                 match &lhs {
                     ExprResult::Plain(obj) => {
                         let Value::Var(dst) = obj else { unreachable!() };
+
+                        let obj = if cast_op {
+                            let obj =
+                                emit_cast_instr(instrs, symbols, &common, obj.clone(), expr_type);
+                            Value::Var(obj)
+                        } else {
+                            obj.clone()
+                        };
                         instrs.push(Instr::Binary {
                             op: op.to_ir(),
-                            lhs: obj.clone(),
+                            lhs: obj,
                             rhs,
                             dst: tmp.clone(),
                         });
+                        let tmp = if cast_op {
+                            emit_cast_instr(instrs, symbols, expr_type, Value::Var(tmp), &common)
+                        } else {
+                            tmp.clone()
+                        };
                         instrs.push(Instr::Copy { src: Value::Var(tmp), dst: dst.clone() });
 
                         lhs
@@ -550,15 +573,23 @@ impl ast::Expr {
                         let Value::Var(dst) = ptr else {
                             unreachable!("pointer cannot be a constant")
                         };
+
                         let lhs = make_ir_variable("drf", expr_type.clone(), symbols);
                         instrs.push(Instr::Load { src_ptr: ptr.clone(), dst: lhs.clone() });
-                        instrs.push(Instr::Binary {
-                            op: op.to_ir(),
-                            lhs: Value::Var(lhs),
-                            rhs,
-                            dst: tmp.clone(),
+
+                        let lhs = Value::Var(if cast_op {
+                            emit_cast_instr(instrs, symbols, &common, Value::Var(lhs), expr_type)
+                        } else {
+                            lhs
                         });
 
+                        instrs.push(Instr::Binary { op: op.to_ir(), lhs, rhs, dst: tmp.clone() });
+
+                        let tmp = if cast_op {
+                            emit_cast_instr(instrs, symbols, expr_type, Value::Var(tmp), &common)
+                        } else {
+                            tmp.clone()
+                        };
                         let ret = Value::Var(tmp);
                         instrs.push(Instr::Store { src: ret.clone(), dst_ptr: dst.clone() });
                         ExprResult::Plain(ret)
@@ -614,24 +645,8 @@ impl ast::Expr {
                     return ExprResult::Plain(src);
                 }
 
-                let dst_var = make_ir_variable("cst", expr_type.clone(), symbols);
-                let dst = dst_var.clone();
+                let dst_var = emit_cast_instr(instrs, symbols, target, src, src_ty);
 
-                let cast_instr = match (target, src_ty) {
-                    (Type::Int | Type::Long, Type::Double) => Instr::DoubleToInt { src, dst },
-                    (Type::UInt | Type::ULong, Type::Double) => Instr::DoubleToUInt { src, dst },
-                    (Type::Double, Type::Int | Type::Long) => Instr::IntToDouble { src, dst },
-                    (Type::Double, Type::UInt | Type::ULong) => Instr::UIntToDouble { src, dst },
-
-                    _ => match target.size().cmp(&src_ty.size()) {
-                        Ordering::Equal => Instr::Copy { src, dst },
-                        Ordering::Less => Instr::Truncate { src, dst },
-                        _ if src_ty.signed() => Instr::SignExtend { src, dst },
-                        _ => Instr::ZeroExtend { src, dst },
-                    },
-                };
-
-                instrs.push(cast_instr);
                 ExprResult::Plain(Value::Var(dst_var))
             }
             Self::AddrOf(inner) => {
@@ -651,6 +666,35 @@ impl ast::Expr {
             }
         }
     }
+}
+
+fn emit_cast_instr(
+    instrs: &mut Vec<Instr>,
+    symbols: &mut Namespace<TypeCtx>,
+    target: &Type,
+    src: Value,
+    src_ty: &Type,
+) -> Place {
+    let dst_var = make_ir_variable("cst", target.clone(), symbols);
+    let dst = dst_var.clone();
+
+    let cast_instr = match (target, src_ty) {
+        (Type::Int | Type::Long, Type::Double) => Instr::DoubleToInt { src, dst },
+        (Type::UInt | Type::ULong, Type::Double) => Instr::DoubleToUInt { src, dst },
+        (Type::Double, Type::Int | Type::Long) => Instr::IntToDouble { src, dst },
+        (Type::Double, Type::UInt | Type::ULong) => Instr::UIntToDouble { src, dst },
+
+        _ => match target.size().cmp(&src_ty.size()) {
+            Ordering::Equal => Instr::Copy { src, dst },
+            Ordering::Less => Instr::Truncate { src, dst },
+            _ if src_ty.signed() => Instr::SignExtend { src, dst },
+            _ => Instr::ZeroExtend { src, dst },
+        },
+    };
+
+    instrs.push(cast_instr);
+
+    dst_var
 }
 
 fn postfix_prefix_instrs(

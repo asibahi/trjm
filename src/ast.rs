@@ -1485,13 +1485,32 @@ impl TypedExpr {
 pub enum Expr {
     Const(Const),
     Var(Identifier),
-    Cast { target: Type, inner: Box<TypedExpr> },
+    Cast {
+        target: Type,
+        inner: Box<TypedExpr>,
+    },
     Unary(UnaryOp, Box<TypedExpr>),
-    Binary { op: BinaryOp, lhs: Box<TypedExpr>, rhs: Box<TypedExpr> },
-    CompoundAssignment { op: BinaryOp, lhs: Box<TypedExpr>, rhs: Box<TypedExpr> },
+    Binary {
+        op: BinaryOp,
+        lhs: Box<TypedExpr>,
+        rhs: Box<TypedExpr>,
+    },
+    CompoundAssignment {
+        op: BinaryOp,
+        lhs: Box<TypedExpr>,
+        rhs: Box<TypedExpr>,
+        common: Option<Type>,
+    },
     Assignemnt(Box<TypedExpr>, Box<TypedExpr>),
-    Conditional { cond: Box<TypedExpr>, then: Box<TypedExpr>, else_: Box<TypedExpr> },
-    FuncCall { name: Identifier, args: Vec<TypedExpr> },
+    Conditional {
+        cond: Box<TypedExpr>,
+        then: Box<TypedExpr>,
+        else_: Box<TypedExpr>,
+    },
+    FuncCall {
+        name: Identifier,
+        args: Vec<TypedExpr>,
+    },
     Deref(Box<TypedExpr>),
     AddrOf(Box<TypedExpr>),
 }
@@ -1503,7 +1522,7 @@ impl Display for Expr {
             Self::Cast { target, inner } => write!(f, "({inner} as ({target}))"),
             Self::Unary(op, expr) => write!(f, "({op} {expr})"),
             Self::Binary { op, lhs, rhs } => write!(f, "({lhs} {op} {rhs})"),
-            Self::CompoundAssignment { op, lhs, rhs } => write!(f, "({lhs} {op}= {rhs})"),
+            Self::CompoundAssignment { op, lhs, rhs, .. } => write!(f, "({lhs} {op}= {rhs})"),
             Self::Assignemnt(lhs, rhs) => write!(f, "({lhs} <- {rhs})"),
             Self::Conditional { cond, then, else_ } => {
                 write!(f, "({cond} ? {then} : {else_})")
@@ -1550,10 +1569,11 @@ impl Expr {
                 lhs: Box::new(lhs.resolve_identifiers(map)?),
                 rhs: Box::new(rhs.resolve_identifiers(map)?),
             },
-            Self::CompoundAssignment { op, lhs, rhs } => Self::CompoundAssignment {
+            Self::CompoundAssignment { op, lhs, rhs, common } => Self::CompoundAssignment {
                 op,
                 lhs: Box::new(lhs.resolve_identifiers(map)?),
                 rhs: Box::new(rhs.resolve_identifiers(map)?),
+                common,
             },
 
             v @ Self::Const(_) => v,
@@ -1775,56 +1795,53 @@ impl Expr {
                 Ok(Self::Assignemnt(lhs, rhs).typed(left_type))
             }
 
-            Self::CompoundAssignment { op, lhs, rhs } => {
+            Self::CompoundAssignment { op, lhs, rhs, .. } => {
                 let lhs = Box::new(lhs.type_check(symbols)?);
                 anyhow::ensure!(lhs.is_place(), "cannot assign to a non place expression");
 
                 let rhs = Box::new(rhs.type_check(symbols)?);
 
-                let common = lhs
-                    .clone()
-                    .type_
-                    .and_then(|lht| rhs.clone().type_.map(|rht| lht.get_common_type(rht)))
-                    .expect("compound assignment operand type should be known at this point");
+                let left_type =
+                    lhs.clone().type_.expect("assignee type should be known at this point");
 
-                match op {
+                let common_inner = left_type.clone().get_common_type(
+                    rhs.type_
+                        .clone()
+                        .expect("compound assignment operand type should be known at this point"),
+                );
+
+                let common = match op {
                     BinaryOp::BitAnd
                     | BinaryOp::BitOr
                     | BinaryOp::BitXor
                     | BinaryOp::LeftShift
                     | BinaryOp::RightShift
-                        if !common.is_intish() =>
+                        if !common_inner.is_intish() =>
                     {
                         anyhow::bail!("can't operate those on a non integer")
                     }
-                    BinaryOp::And | BinaryOp::Or => {
-                        return Ok(Self::CompoundAssignment { op, lhs, rhs }.typed(Type::Int));
+                    BinaryOp::Reminder
+                        if !(lhs.type_.as_ref().is_some_and(Type::is_intish)
+                            && rhs.type_.as_ref().is_some_and(Type::is_intish)) =>
+                    {
+                        anyhow::bail!("cannot modulo a double or a pointer")
                     }
-                    _ => {}
-                }
+                    BinaryOp::Multiply | BinaryOp::Divide
+                        if !(lhs.type_.as_ref().is_some_and(Type::is_arithmatic)
+                            && rhs.type_.as_ref().is_some_and(Type::is_arithmatic)) =>
+                    {
+                        anyhow::bail!("cannot mulyiply a pointer")
+                    }
+                    BinaryOp::And | BinaryOp::Or => {
+                        return Ok(Self::CompoundAssignment {
+                            op,
+                            lhs,
+                            rhs,
+                            common: Some(Type::Int),
+                        }
+                        .typed(Type::Int));
+                    }
 
-                let left_type =
-                    lhs.clone().type_.expect("assignee type should be known at this point");
-
-                let lhs_cast = if matches!(op, BinaryOp::RightShift | BinaryOp::LeftShift) {
-                    lhs.clone()
-                } else {
-                    Box::new(lhs.clone().cast_to_type(common.clone()))
-                };
-
-                let rhs = Box::new(rhs.cast_to_type(common.clone()));
-
-                let ret = if matches!(lhs_cast.expr, Self::Cast { .. }) {
-                    // this is probably wrong
-                    Self::Assignemnt(
-                        lhs,
-                        Box::new(Self::Binary { op, lhs: lhs_cast, rhs }.typed(common)),
-                    )
-                } else {
-                    Self::CompoundAssignment { op, lhs: lhs_cast, rhs }
-                };
-
-                Ok(match op {
                     BinaryOp::Add
                     | BinaryOp::Subtract
                     | BinaryOp::Multiply
@@ -1832,19 +1849,21 @@ impl Expr {
                     | BinaryOp::Reminder
                     | BinaryOp::BitAnd
                     | BinaryOp::BitOr
-                    | BinaryOp::BitXor
-                    | BinaryOp::LeftShift
-                    | BinaryOp::RightShift => ret.typed(left_type),
+                    | BinaryOp::BitXor => Some(common_inner.clone()),
+
+                    BinaryOp::LeftShift | BinaryOp::RightShift => Some(left_type.clone()),
 
                     BinaryOp::Equal
                     | BinaryOp::NotEqual
                     | BinaryOp::GreaterThan
                     | BinaryOp::GreaterOrEqual
                     | BinaryOp::LessThan
-                    | BinaryOp::LessOrEqual
-                    | BinaryOp::And
-                    | BinaryOp::Or => unreachable!(),
-                })
+                    | BinaryOp::LessOrEqual => unreachable!(),
+                };
+
+                let rhs = Box::new(rhs.cast_to_type(common_inner));
+
+                Ok(Self::CompoundAssignment { op, lhs, rhs, common }.typed(left_type))
             }
             Self::Const(c) => match c {
                 Const::Int(_) => Ok(self.typed(Type::Int)),

@@ -10,7 +10,7 @@ use std::{
 };
 
 // IndexMap retains insertion order so it prints consistently
-pub type Namespace<T> = IndexMap<Identifier, T, foldhash::fast::RandomState>;
+pub type Namespace<T> = IndexMap<Identifier, T, rustc_hash::FxBuildHasher>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct IdCtx {
@@ -729,7 +729,7 @@ impl BlockItem {
     }
 }
 
-type SwitchCtx<'s> = Option<&'s mut IndexSet<Option<Const>, foldhash::fast::RandomState>>;
+type SwitchCtx<'s> = Option<&'s mut IndexSet<Option<Const>, rustc_hash::FxBuildHasher>>;
 
 #[derive(Debug, Clone)]
 pub struct Block(pub Vec<BlockItem>);

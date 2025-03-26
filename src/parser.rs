@@ -17,8 +17,8 @@ use nom::{
 };
 use nom_language::precedence::{Assoc, Binary, Operation, Unary, binary_op, precedence, unary_op};
 
-// type ParseError<'s> = ();
 type ParseError<'s> = (Tokens<'s>, error::ErrorKind);
+// type ParseError<'s> = nom_language::error::VerboseError<Tokens<'s>>;
 type ParseResult<'s, T> = nom::IResult<Tokens<'s>, T, ParseError<'s>>;
 
 pub fn parse(tokens: &[Token]) -> Result<Program, ParseError<'_>> {
@@ -36,9 +36,10 @@ macro_rules! tag_token {
 
     ($($token:pat),+) => {
         verify(
-            take((tag_token!(@c $($token),+)   )),
+            take((tag_token!(@c $($token),+))),
             |t: &Tokens| matches!(t.0[0..tag_token!(@c $($token),+)],[$($token),+])
         )
+        .context(concat!("token_tag: ", stringify!($($token),+)))
     };
     ($($token:pat),+ => $map:expr) => {
         tag_token!($($token),+).map(|_| $map)
@@ -51,25 +52,35 @@ fn parse_var_decl(i: Tokens<'_>) -> ParseResult<'_, VarDecl> {
             Decl::Func(_) => None,
             Decl::Var(var) => Some(var),
         })
+        .context("variable declaration")
         .parse_complete(i)
 }
 
 fn parse_decl(i: Tokens<'_>) -> ParseResult<'_, Decl> {
-    let (i, (base_type, sc)) = parse_specifiers.parse_complete(i)?;
+    let (i, (base_type, sc)) =
+        parse_specifiers.context("specifiers in declaration").parse_complete(i)?;
 
-    let (i, (name, decl_type, params)) =
-        parse_declarator.map_opt(|d| process_declarator(d, base_type.clone())).parse_complete(i)?;
+    let (i, (name, decl_type, params)) = parse_declarator
+        .map_opt(|d| process_declarator(d, base_type.clone()))
+        .context("declarator in declaration")
+        .parse_complete(i)?;
 
     let result = match decl_type {
         Type::Func { .. } => {
-            let (i, body) =
-                parse_block.map(Some).or(tag_token!(Token::Semicolon => None)).parse_complete(i)?;
+            let (i, body) = parse_block
+                .map(Some)
+                .or(tag_token!(Token::Semicolon => None))
+                .context("functiom body declaration")
+                .parse_complete(i)?;
 
             (i, Decl::Func(FuncDecl { name, params, body, sc, fun_type: decl_type }))
         }
         _ => {
             let (i, init) = terminated(
-                opt(preceded(tag_token!(Token::Equal), parse_initializaer)),
+                opt(preceded(
+                    tag_token!(Token::Equal),
+                    parse_initializaer.context("variable init declaration"),
+                )),
                 tag_token!(Token::Semicolon),
             )
             .parse_complete(i)?;
@@ -94,6 +105,7 @@ fn parse_initializaer(i: Tokens<'_>) -> ParseResult<'_, Initializer> {
         )
         .map(Initializer::Compound),
     ))
+    .context("initializer")
     .parse_complete(i)
 }
 
@@ -121,6 +133,7 @@ fn parse_param_info(i: Tokens<'_>) -> ParseResult<'_, Vec<ParamInfo>> {
                 .map(|(type_, declarator)| ParamInfo { type_, declarator }),
         ),
     )))
+    .context("paramerer info")
     .parse_complete(i)
 }
 
@@ -266,7 +279,7 @@ fn parse_specifiers(i: Tokens<'_>) -> ParseResult<'_, (Type, StorageClass)> {
     }
 
     let sc = sc.first().map_or(StorageClass::None, |i| *i);
-    let (_, ty) = parse_base_type(Tokens::from(&ty[..]))
+    let (_, ty) = parse_base_type(Tokens(&ty[..]))
         .map_err(|e| e.map(|_| nom::error::make_error(i, error::ErrorKind::CrLf)))?;
 
     Ok((i, (ty, sc)))
@@ -368,6 +381,7 @@ fn parse_stmt(i: Tokens<'_>) -> ParseResult<'_, Stmt> {
         ret, expr, if_else, compound, goto, label, break_, continue_, while_, do_while_, for_,
         switch, case, dflt, null,
     ))
+    .context("statement")
     .parse_complete(i)
 }
 
@@ -556,16 +570,19 @@ fn parse_int_literal(i: Tokens<'_>) -> ParseResult<'_, TypedExpr> {
 fn parse_operands(i: Tokens<'_>) -> ParseResult<'_, TypedExpr> {
     alt((
         // const int
-        parse_int_literal,
+        parse_int_literal.context("integer literal"),
         // const float
-        tag_token!(Token::Float(_)).map(|tokens: Tokens<'_>| {
-            let Token::Float(cnst) = &tokens.0[0] else { unreachable!() };
-            Expr::Const(Const::Double(*cnst)).typed(Type::Double)
-        }),
+        tag_token!(Token::Float(_))
+            .map(|tokens: Tokens<'_>| {
+                let Token::Float(cnst) = &tokens.0[0] else { unreachable!() };
+                Expr::Const(Const::Double(*cnst)).typed(Type::Double)
+            })
+            .context("float literal"),
         // function call
         parse_ident
             .and(parenthesized(separated_list0(tag_token!(Token::Comma), parse_expr)))
-            .map(|(name, args)| Expr::FuncCall { name, args }.dummy_typed()),
+            .map(|(name, args)| Expr::FuncCall { name, args }.dummy_typed())
+            .context("function call expr"),
         // group
         parenthesized(parse_expr),
         // variable
@@ -612,6 +629,7 @@ fn parse_expr(i: Tokens<'_>) -> ParseResult<'_, TypedExpr> {
             .dummy_typed())
         },
     )
+    .context("expression")
     .parse_complete(i)
 }
 
@@ -628,3 +646,14 @@ where
 {
     delimited(tag_token!(Token::BracketOpen), parser, tag_token!(Token::BracketClose))
 }
+
+// helper trait for diagnostics
+trait InnerContext
+where
+    Self: std::marker::Sized,
+{
+    fn context(self, msg: &'static str) -> error::Context<Self> {
+        error::context(msg, self)
+    }
+}
+impl<'s, T> InnerContext for T where T: Parser<Tokens<'s>> {}

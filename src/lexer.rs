@@ -54,59 +54,52 @@ pub enum Token {
     PlusEqual, // +=
     DblPlus,   // ++
 
-    Astrisk,
-    AstriskEqual,
-
-    ForeSlash,
-    ForeSlashEqual,
-
-    Percent,
-    PercentEqual,
-
-    Tilde,
+    Astrisk,        // *
+    AstriskEqual,   // *=
+    ForeSlash,      // /
+    ForeSlashEqual, // /=
+    Percent,        // %
+    PercentEqual,   // %=
+    Tilde,          // ~
 
     Hyphen,      // -
     HyphenEqual, // -=
     DblHyphen,   // --
 
-    DblEqual,
-    Equal,
-    Bang,
-    BangEqual,
-
-    Ambersand,
-    DblAmbersand,
-    AmbersandEqual,
-
-    Pipe,
-    DblPipe,
-    PipeEqual,
-
-    Caret,
-    CaretEqual,
-
+    Equal,        // =
+    DblEqual,     // ==
+    Bang,         // !
+    BangEqual,    // !=
     LessThan,     // <
     GreaterThan,  // >
     LessEqual,    // <=
     GreaterEqual, // >=
+
+    Ambersand,      // &
+    DblAmbersand,   // &&
+    AmbersandEqual, // &=
+    Pipe,           // |
+    DblPipe,        // ||
+    PipeEqual,      // |=
+    Caret,          // ^
+    CaretEqual,     // ^=
 
     LeftShift,       // <<
     LeftShiftEqual,  // <<=
     RightShift,      // >>
     RightShiftEqual, // >>=
 
-    QMark,
-    Colon,
+    QMark, // ?
+    Colon, // :
 
-    // Punctuation
-    ParenOpen,
-    ParenClose,
-    BraceOpen,
-    BraceClose,
-    BracketOpen,
-    BracketClose,
-    Semicolon,
-    Comma,
+    ParenOpen,    // (
+    ParenClose,   // )
+    BraceOpen,    // {
+    BraceClose,   // }
+    BracketOpen,  // [
+    BracketClose, // ]
+    Semicolon,    // ;
+    Comma,        //,
 }
 impl Token {
     pub fn unwrap_ident(&self) -> Option<Identifier> {
@@ -339,12 +332,6 @@ token!(
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Tokens<'s>(pub &'s [Token]);
-
-impl<'s> From<&'s [Token]> for Tokens<'s> {
-    fn from(value: &'s [Token]) -> Self {
-        Tokens(value)
-    }
-}
 
 // stolen wholesale from nom's impl of &[u8]
 impl<'s> Input for Tokens<'s> {

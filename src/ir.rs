@@ -664,6 +664,7 @@ impl ast::Expr {
                 let result = inner.to_ir_and_convert(instrs, symbols);
                 ExprResult::DerefPtr(result)
             }
+            Self::Subscript(..) => todo!(),
         }
     }
 }
@@ -720,7 +721,7 @@ fn postfix_prefix_instrs(
         Type::UInt => Const::UInt(1),
         Type::ULong => Const::ULong(1),
         Type::Double => Const::Double(1.0),
-        Type::Func { .. } | Type::Pointer { .. } => unreachable!(),
+        Type::Func { .. } | Type::Pointer { .. } | Type::Array { .. } => unreachable!(),
     };
     let result = make_ir_variable("inc", expr_type.clone(), symbols);
 
@@ -878,7 +879,8 @@ impl ast::Decl {
 }
 impl ast::VarDecl {
     fn to_ir(&self, instrs: &mut Vec<Instr>, symbols: &mut Namespace<TypeCtx>) {
-        if let Some(e) = &self.init {
+        // placeholder for now. todo
+        if let Some(ast::Initializer::Single(e)) = &self.init {
             let Some(TypeCtx { type_: dst_type, .. }) = symbols.get(&self.name) else {
                 unreachable!()
             };

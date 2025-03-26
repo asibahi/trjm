@@ -18,7 +18,7 @@ use nom::{
 use nom_language::precedence::{Assoc, Binary, Operation, Unary, binary_op, precedence, unary_op};
 
 // type ParseError<'s> = ();
-type ParseError<'s> = (Tokens<'s>, nom::error::ErrorKind);
+type ParseError<'s> = (Tokens<'s>, error::ErrorKind);
 type ParseResult<'s, T> = nom::IResult<Tokens<'s>, T, ParseError<'s>>;
 
 pub fn parse(tokens: &[Token]) -> Result<Program, ParseError<'_>> {
@@ -69,7 +69,7 @@ fn parse_decl(i: Tokens<'_>) -> ParseResult<'_, Decl> {
         }
         _ => {
             let (i, init) = terminated(
-                opt(preceded(tag_token!(Token::Equal), parse_expr)),
+                opt(preceded(tag_token!(Token::Equal), parse_initializaer)),
                 tag_token!(Token::Semicolon),
             )
             .parse_complete(i)?;
@@ -81,12 +81,31 @@ fn parse_decl(i: Tokens<'_>) -> ParseResult<'_, Decl> {
     Ok(result)
 }
 
+fn parse_initializaer(i: Tokens<'_>) -> ParseResult<'_, Initializer> {
+    alt((
+        parse_expr.map(Initializer::Single),
+        delimited(
+            tag_token!(Token::BraceOpen),
+            terminated(
+                separated_list1(tag_token!(Token::Comma), parse_initializaer),
+                opt(tag_token!(Token::Comma)),
+            ),
+            tag_token!(Token::BraceClose),
+        )
+        .map(Initializer::Compound),
+    ))
+    .parse_complete(i)
+}
+
+#[derive(Debug)]
 enum Declarator {
     Ident(Identifier),
     Pointer(Box<Declarator>),
+    Array(Box<Declarator>, u64),
     Func(Vec<ParamInfo>, Box<Declarator>),
 }
 
+#[derive(Debug)]
 struct ParamInfo {
     type_: Type,
     declarator: Declarator,
@@ -108,13 +127,29 @@ fn parse_param_info(i: Tokens<'_>) -> ParseResult<'_, Vec<ParamInfo>> {
 fn parse_declarator(i: Tokens<'_>) -> ParseResult<'_, Declarator> {
     precedence(
         unary_op(2, tag_token!(Token::Astrisk => ())),
-        unary_op(1, parse_param_info),
+        alt((
+            // function
+            unary_op(1, parse_param_info.map(Right)),
+            // array
+            unary_op(
+                1,
+                bracketed(tag_token!(Token::Integer { .. }).map_opt(|t: Tokens<'_>| {
+                    match t.0[0] {
+                        Token::Integer(0, _) => None,
+                        Token::Integer(i, _) => Some(i),
+                        _ => unreachable!(),
+                    }
+                }))
+                .map(Left),
+            ),
+        )),
         fail(),
         parenthesized(parse_declarator).or(parse_ident.map(Declarator::Ident)),
         |op| {
             let ret = match op {
                 Operation::Prefix((), d) => Declarator::Pointer(Box::new(d)),
-                Operation::Postfix(d, params) => Declarator::Func(params, Box::new(d)),
+                Operation::Postfix(d, Right(params)) => Declarator::Func(params, Box::new(d)),
+                Operation::Postfix(d, Left(size)) => Declarator::Array(Box::new(d), size),
                 Operation::Binary(_, (), _) => return Err(()),
             };
             Ok(ret)
@@ -133,6 +168,11 @@ fn process_declarator(
             let derived = Type::Pointer { to: Box::new(base) };
             process_declarator(*declarator, derived)
         }
+        Declarator::Array(declarator, size) => {
+            let derived = Type::Array { element: Box::new(base), size };
+            process_declarator(*declarator, derived)
+        }
+        Declarator::Func(..) if matches!(base, Type::Array { .. }) => None,
         Declarator::Func(params, d) => match *d {
             Declarator::Ident(name) => {
                 let mut param_types = Vec::with_capacity(params.len());
@@ -226,7 +266,8 @@ fn parse_specifiers(i: Tokens<'_>) -> ParseResult<'_, (Type, StorageClass)> {
     }
 
     let sc = sc.first().map_or(StorageClass::None, |i| *i);
-    let (_, ty) = parse_base_type(Tokens::from(&ty[..])).map_err(|e| e.map_input(|_| i))?;
+    let (_, ty) = parse_base_type(Tokens::from(&ty[..]))
+        .map_err(|e| e.map(|_| nom::error::make_error(i, error::ErrorKind::CrLf)))?;
 
     Ok((i, (ty, sc)))
 }
@@ -331,32 +372,45 @@ fn parse_stmt(i: Tokens<'_>) -> ParseResult<'_, Stmt> {
 }
 
 #[derive(Debug, Clone)]
-enum AbstractDeclarator {
-    Pointer(Box<AbstractDeclarator>),
+enum AbsDeclarator {
+    Pointer(Box<AbsDeclarator>),
+    Array(Box<AbsDeclarator>, u64),
     Base,
 }
 
-fn parse_abstract_declarator(i: Tokens<'_>) -> ParseResult<'_, AbstractDeclarator> {
+fn parse_abstract_declarator(i: Tokens<'_>) -> ParseResult<'_, AbsDeclarator> {
     precedence(
         unary_op(2, tag_token!(Token::Astrisk => ())),
+        unary_op(
+            1,
+            bracketed(tag_token!(Token::Integer { .. }).map_opt(|t: Tokens<'_>| match t.0[0] {
+                Token::Integer(0, _) => None,
+                Token::Integer(i, _) => Some(i),
+                _ => unreachable!(),
+            })),
+        ),
         fail(),
-        fail(),
-        parenthesized(parse_abstract_declarator).or(success(AbstractDeclarator::Base)),
+        parenthesized(parse_abstract_declarator).or(success(AbsDeclarator::Base)),
         |op| match op {
-            Operation::Prefix((), d) => Ok(AbstractDeclarator::Pointer(Box::new(d))),
-            Operation::Postfix(_, ()) | Operation::Binary(_, (), _) => Err(()),
+            Operation::Prefix((), d) => Ok(AbsDeclarator::Pointer(Box::new(d))),
+            Operation::Postfix(d, size) => Ok(AbsDeclarator::Array(Box::new(d), size)),
+            Operation::Binary(_, (), _) => Err(()),
         },
     )
     .parse_complete(i)
 }
 
-fn process_abstract_declarator(declarator: AbstractDeclarator, base: Type) -> Type {
+fn process_abstract_declarator(declarator: AbsDeclarator, base: Type) -> Type {
     match declarator {
-        AbstractDeclarator::Pointer(declarator) => {
+        AbsDeclarator::Pointer(declarator) => {
             let derived = Type::Pointer { to: Box::new(base) };
             process_abstract_declarator(*declarator, derived)
         }
-        AbstractDeclarator::Base => base,
+        AbsDeclarator::Array(declarator, size) => {
+            let derived = Type::Array { element: Box::new(base), size };
+            process_abstract_declarator(*declarator, derived)
+        }
+        AbsDeclarator::Base => base,
     }
 }
 
@@ -386,12 +440,13 @@ fn parse_prefixes(i: Tokens<'_>) -> ParseResult<'_, Unary<Either<UnaryOp, Type>,
     .parse_complete(i)
 }
 
-fn parse_postfixes(i: Tokens<'_>) -> ParseResult<'_, Unary<UnaryOp, i32>> {
-    // chapter 5 extra credit
-
+fn parse_postfixes(i: Tokens<'_>) -> ParseResult<'_, Unary<Either<UnaryOp, TypedExpr>, i32>> {
     alt((
-        unary_op(1, tag_token!(Token::DblPlus => UnaryOp::IncPost)),
-        unary_op(1, tag_token!(Token::DblHyphen => UnaryOp::DecPost)),
+        // chapter 5 extra credit
+        unary_op(1, tag_token!(Token::DblPlus => UnaryOp::IncPost).map(Left)),
+        unary_op(1, tag_token!(Token::DblHyphen => UnaryOp::DecPost).map(Left)),
+        // chapter 15
+        unary_op(1, bracketed(parse_expr).map(Right)),
     ))
     .parse_complete(i)
 }
@@ -534,7 +589,8 @@ fn parse_expr(i: Tokens<'_>) -> ParseResult<'_, TypedExpr> {
             Ok(match op {
                 Prefix(Left(UnaryOp::AddressOf), exp) => Expr::AddrOf(Box::new(exp)),
                 Prefix(Left(UnaryOp::Dereference), exp) => Expr::Deref(Box::new(exp)),
-                Prefix(Left(op), exp) | Postfix(exp, op) => Expr::Unary(op, Box::new(exp)),
+                Prefix(Left(op), exp) | Postfix(exp, Left(op)) => Expr::Unary(op, Box::new(exp)),
+                Postfix(e1, Right(e2)) => Expr::Subscript(Box::new(e1), Box::new(e2)),
                 Prefix(Right(ty), exp) => Expr::Cast { target: ty, inner: Box::new(exp) },
                 Binary(lhs, Typical(op), rhs) => {
                     Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }
@@ -564,4 +620,11 @@ where
     P: Parser<Tokens<'a>, Output = O, Error = ParseError<'a>>,
 {
     delimited(tag_token!(Token::ParenOpen), parser, tag_token!(Token::ParenClose))
+}
+
+fn bracketed<'a, P, O>(parser: P) -> impl Parser<Tokens<'a>, Output = O, Error = ParseError<'a>>
+where
+    P: Parser<Tokens<'a>, Output = O, Error = ParseError<'a>>,
+{
+    delimited(tag_token!(Token::BracketOpen), parser, tag_token!(Token::BracketClose))
 }

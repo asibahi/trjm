@@ -97,6 +97,7 @@ pub enum Type {
     Double,
     Func { params: Vec<Type>, ret: Box<Type> },
     Pointer { to: Box<Type> },
+    Array { element: Box<Type>, size: u64 },
 }
 impl Display for Type {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -120,6 +121,10 @@ impl Display for Type {
                 let buf = eco_format!("ptr->({to})");
                 f.pad(&buf)
             }
+            Self::Array { element, size } => {
+                let buf = eco_format!("[{element}; {size}]");
+                f.pad(&buf)
+            }
         }
     }
 }
@@ -134,6 +139,7 @@ impl Type {
             ),
 
             Self::Double => unreachable!("double size unused for IR"),
+            Self::Array { .. } => todo!(),
         }
     }
     pub fn signed(&self) -> bool {
@@ -144,6 +150,7 @@ impl Type {
                 "function types don't have size. why is function in the same type anyway ?"
             ),
             Self::Double => unreachable!("doubled signedness unused for IR"),
+            Self::Array { .. } => todo!(),
         }
     }
     fn get_common_type(self, other: Self) -> Self {
@@ -169,6 +176,7 @@ impl Type {
             Self::Func { .. } => unreachable!("function static value not a thing"),
 
             Self::Double => StaticInit::Double(0.0),
+            Self::Array { .. } => todo!(),
         }
     }
     fn is_intish(&self) -> bool {
@@ -330,9 +338,41 @@ impl Decl {
 }
 
 #[derive(Debug, Clone)]
+pub enum Initializer {
+    Single(TypedExpr),
+    Compound(Vec<Initializer>),
+}
+impl Display for Initializer {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Initializer::Single(expr) => write!(f, "{}", expr),
+            Initializer::Compound(inits) => {
+                for (idx, init) in inits.iter().enumerate() {
+                    write!(f, "{}{init}", if idx != 0 { ", " } else { "{ " })?;
+                }
+                write!(f, " }}")
+            }
+        }
+    }
+}
+impl Initializer {
+    fn type_check(&self, _symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
+        todo!()
+    }
+
+    fn cast_by_assignment(self, _target: Type) -> anyhow::Result<Self> {
+        todo!()
+    }
+
+    fn resolve_identifiers(self, _map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {
+        todo!()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct VarDecl {
     pub name: Identifier,
-    pub init: Option<TypedExpr>,
+    pub init: Option<Initializer>,
     pub sc: StorageClass,
     pub var_type: Type,
 }
@@ -352,7 +392,8 @@ impl Display for VarDecl {
 impl VarDecl {
     fn type_check_file(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
         let mut init = match self.init {
-            Some(TypedExpr { expr: Expr::Const(cnst), .. }) => {
+            // place holder. check todo
+            Some(Initializer::Single(TypedExpr { expr: Expr::Const(cnst), .. })) => {
                 Initial(cnst.into_static_init(&self.var_type))
             }
             None if self.sc == StorageClass::Extern => NoInit,
@@ -417,7 +458,8 @@ impl VarDecl {
             },
             StorageClass::Static => {
                 let init_value = match self.init.take() {
-                    Some(TypedExpr { expr: Expr::Const(cnst), .. }) => {
+                    // place holder for now. todo
+                    Some(Initializer::Single(TypedExpr { expr: Expr::Const(cnst), .. })) => {
                         Initial(cnst.into_static_init(&self.var_type))
                     }
                     None => Initial(StaticInit::Int(0)),
@@ -1513,6 +1555,7 @@ pub enum Expr {
     },
     Deref(Box<TypedExpr>),
     AddrOf(Box<TypedExpr>),
+    Subscript(Box<TypedExpr>, Box<TypedExpr>),
 }
 impl Display for Expr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -1536,6 +1579,7 @@ impl Display for Expr {
             }
             Self::AddrOf(expr) => write!(f, "(& {expr})"),
             Self::Deref(expr) => write!(f, "(* {expr})"),
+            Self::Subscript(e1, e2) => write!(f, "({e1}[{e2}])"),
         }
     }
 }
@@ -1609,6 +1653,7 @@ impl Expr {
             }
             Self::AddrOf(expr) => Self::AddrOf(Box::new(expr.resolve_identifiers(map)?)),
             Self::Deref(expr) => Self::Deref(Box::new(expr.resolve_identifiers(map)?)),
+            Self::Subscript(..) => todo!(),
         })
     }
 
@@ -1903,6 +1948,7 @@ impl Expr {
                 }
                 Ok(Self::Cast { target: target.clone(), inner }.typed(target))
             }
+            Self::Subscript(..) => todo!(),
         }
     }
 }

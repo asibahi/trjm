@@ -38,6 +38,7 @@ impl From<TypeCtx> for BSymbol {
             }
             (Type::Double, Static { .. }) => Self::new_obj(Doubleword, false, true, false),
             (Type::Double, Local) => Self::new_obj(Doubleword, false, false, false),
+            (Type::Array { .. }, _) => todo!(),
         }
     }
 }
@@ -836,6 +837,7 @@ impl ir::TopLevel {
                     Type::Int | Type::UInt => 4,
                     Type::Long | Type::ULong | Type::Pointer { .. } | Type::Double => 8,
                     Type::Func { .. } => unreachable!(),
+                    Type::Array { .. } => todo!(),
                 },
             },
         }

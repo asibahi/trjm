@@ -113,7 +113,7 @@ fn parse_initializaer(i: Tokens<'_>) -> ParseResult<'_, Initializer> {
 enum Declarator {
     Ident(Identifier),
     Pointer(Box<Declarator>),
-    Array(Box<Declarator>, u64),
+    Array(Box<Declarator>, usize),
     Func(Vec<ParamInfo>, Box<Declarator>),
 }
 
@@ -149,7 +149,7 @@ fn parse_declarator(i: Tokens<'_>) -> ParseResult<'_, Declarator> {
                 bracketed(tag_token!(Token::Integer { .. }).map_opt(|t: Tokens<'_>| {
                     match t.0[0] {
                         Token::Integer(0, _) => None,
-                        Token::Integer(i, _) => Some(i),
+                        Token::Integer(i, _) => Some(i as usize),
                         _ => unreachable!(),
                     }
                 }))
@@ -388,7 +388,7 @@ fn parse_stmt(i: Tokens<'_>) -> ParseResult<'_, Stmt> {
 #[derive(Debug, Clone)]
 enum AbsDeclarator {
     Pointer(Box<AbsDeclarator>),
-    Array(Box<AbsDeclarator>, u64),
+    Array(Box<AbsDeclarator>, usize),
     Base,
 }
 
@@ -399,7 +399,7 @@ fn parse_abstract_declarator(i: Tokens<'_>) -> ParseResult<'_, AbsDeclarator> {
             1,
             bracketed(tag_token!(Token::Integer { .. }).map_opt(|t: Tokens<'_>| match t.0[0] {
                 Token::Integer(0, _) => None,
-                Token::Integer(i, _) => Some(i),
+                Token::Integer(i, _) => Some(i as usize),
                 _ => unreachable!(),
             })),
         ),

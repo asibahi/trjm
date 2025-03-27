@@ -774,6 +774,7 @@ impl ir::Program {
                 StaticInit::Int(_) | StaticInit::UInt(_) => Longword,
                 StaticInit::Long(_) | StaticInit::ULong(_) => Quadword,
                 StaticInit::Double(_) => Doubleword,
+                _ => todo!(),
             };
 
             symbols.insert(

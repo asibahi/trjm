@@ -214,18 +214,18 @@ impl ast::Program {
             .collect::<Vec<_>>();
 
         // traverse symbol table
-        top_level.extend(symbols.iter().filter_map(|(name, type_ctx)| match type_ctx.attr {
+        top_level.extend(symbols.iter().filter_map(|(name, type_ctx)| match &type_ctx.attr {
             ast::Attributes::Static { init, global } => match init {
                 ast::Tentative => Some(TopLevel::StaticVar {
                     name: name.clone(),
-                    global,
+                    global: *global,
                     init: type_ctx.type_.zeroed_static(),
                     type_: type_ctx.type_.clone(),
                 }),
                 ast::Initial(init) => Some(TopLevel::StaticVar {
                     name: name.clone(),
-                    global,
-                    init,
+                    global: *global,
+                    init: init[0],
                     type_: type_ctx.type_.clone(),
                 }),
 

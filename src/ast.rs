@@ -31,7 +31,7 @@ pub struct TypeCtx {
 }
 impl Display for TypeCtx {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let attr = match self.attr {
+        let attr = match &self.attr {
             Func { defined: false, global: true } => "global declaration".into(),
             Func { defined: false, global: false } => "local declaration".into(),
             Static { init, global: true } => eco_format!("global {init}"),
@@ -97,7 +97,7 @@ pub enum Type {
     Double,
     Func { params: Vec<Type>, ret: Box<Type> },
     Pointer { to: Box<Type> },
-    Array { element: Box<Type>, size: u64 },
+    Array { element: Box<Type>, size: usize },
 }
 impl Display for Type {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -139,18 +139,17 @@ impl Type {
             ),
 
             Self::Double => unreachable!("double size unused for IR"),
-            Self::Array { .. } => todo!(),
+            Self::Array { element, size } => size * element.size(),
         }
     }
     pub fn signed(&self) -> bool {
         match self {
             Self::Int | Self::Long => true,
             Self::UInt | Self::ULong | Self::Pointer { .. } => false,
-            Self::Func { .. } => unreachable!(
-                "function types don't have size. why is function in the same type anyway ?"
+            Self::Func { .. } | Self::Array { .. } => unreachable!(
+                "function and Array types don't have sign. why is function in the same type anyway ?"
             ),
             Self::Double => unreachable!("doubled signedness unused for IR"),
-            Self::Array { .. } => todo!(),
         }
     }
     fn get_common_type(self, other: Self) -> Self {
@@ -176,7 +175,29 @@ impl Type {
             Self::Func { .. } => unreachable!("function static value not a thing"),
 
             Self::Double => StaticInit::Double(0.0),
-            Self::Array { .. } => todo!(),
+            Self::Array { element, size } => StaticInit::Zero(size * element.size()),
+        }
+    }
+    pub fn zeroed_init(&self) -> Initializer {
+        macro_rules! zi {
+            ($ty:tt) => {
+                Initializer::Single(TypedExpr {
+                    expr: Expr::Const(Const::$ty(0 as _)),
+                    type_: Some(Self::$ty),
+                })
+            };
+        }
+        match self {
+            Self::Int => zi!(Int),
+            Self::Long => zi!(Long),
+            Self::UInt => zi!(UInt),
+            Self::ULong | Self::Pointer { .. } => zi!(ULong),
+            Self::Func { .. } => unreachable!("function zero values are not a thing"),
+
+            Self::Double => zi!(Double),
+            Self::Array { element, size } => {
+                Initializer::Compound(vec![element.zeroed_init(); *size])
+            }
         }
     }
     fn is_intish(&self) -> bool {
@@ -187,7 +208,7 @@ impl Type {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Attributes {
     Func { defined: bool, global: bool },
     Static { init: InitValue, global: bool },
@@ -195,10 +216,10 @@ pub enum Attributes {
 }
 pub use Attributes::*;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum InitValue {
     Tentative,
-    Initial(StaticInit),
+    Initial(Vec<StaticInit>),
     NoInit,
 }
 pub use InitValue::*;
@@ -206,7 +227,16 @@ impl Display for InitValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Tentative => write!(f, "tentative"),
-            Initial(init) => write!(f, "declared {init}"),
+            Initial(inits) => {
+                write!(f, "declared {{ ")?;
+                for (idx, init) in inits.iter().enumerate() {
+                    if idx > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{init}")?;
+                }
+                write!(f, " }}")
+            }
             NoInit => write!(f, "uninit"),
         }
     }
@@ -219,6 +249,7 @@ pub enum StaticInit {
     UInt(u32),
     ULong(u64),
     Double(f64),
+    Zero(usize),
 }
 impl StaticInit {
     pub fn is_zero(self) -> bool {
@@ -235,6 +266,7 @@ impl Display for StaticInit {
             Self::ULong(i) => write!(f, "quad   {i}"),
 
             Self::Double(i) => write!(f, "quad   {}", i.to_bits()),
+            Self::Zero(i) => write!(f, "todo   {i}"),
         }
     }
 }
@@ -345,8 +377,8 @@ pub enum Initializer {
 impl Display for Initializer {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Initializer::Single(expr) => write!(f, "{}", expr),
-            Initializer::Compound(inits) => {
+            Self::Single(expr) => write!(f, "{}", expr),
+            Self::Compound(inits) => {
                 for (idx, init) in inits.iter().enumerate() {
                     write!(f, "{}{init}", if idx != 0 { ", " } else { "{ " })?;
                 }
@@ -356,16 +388,71 @@ impl Display for Initializer {
     }
 }
 impl Initializer {
-    fn type_check(&self, _symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
-        todo!()
+    fn type_check(self, symbols: &mut Namespace<TypeCtx>, target: Type) -> anyhow::Result<Self> {
+        Ok(match (&target, self) {
+            (_, Self::Single(expr)) => {
+                let expr =
+                    expr.clone().type_check_and_convert(symbols)?.cast_by_assignment(target)?;
+                // is this correct?
+                Self::Single(expr)
+            }
+            (Type::Array { element, size }, Initializer::Compound(inits)) => {
+                anyhow::ensure!(inits.len() <= *size, "wrong number of values in initializer");
+
+                let mut inits = inits
+                    .into_iter()
+                    .map(|i| i.type_check(symbols, *element.clone()))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                while inits.len() < *size {
+                    inits.push(element.zeroed_init());
+                }
+
+                Self::Compound(inits)
+            }
+            _ => anyhow::bail!("cannot initialize a scalar with a compound init"),
+        })
     }
 
-    fn cast_by_assignment(self, _target: Type) -> anyhow::Result<Self> {
-        todo!()
+    fn resolve_identifiers(self, map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {
+        Ok(match self {
+            Self::Single(expr) => Self::Single(expr.resolve_identifiers(map)?),
+            Self::Compound(inits) => {
+                let inits = inits
+                    .into_iter()
+                    .map(|i| i.resolve_identifiers(map))
+                    .collect::<Result<_, _>>()?;
+                Self::Compound(inits)
+            }
+        })
     }
 
-    fn resolve_identifiers(self, _map: &mut Namespace<IdCtx>) -> anyhow::Result<Self> {
-        todo!()
+    fn to_init_value(&self, var_type: Type) -> anyhow::Result<Vec<StaticInit>> {
+        let init_value = match self {
+            Initializer::Single(TypedExpr { expr: Expr::Const(cnst), .. }) => {
+                vec![cnst.into_static_init(&var_type)]
+            }
+            Initializer::Single(TypedExpr { expr: Expr::Cast { inner, .. }, .. }) => {
+                return Initializer::Single(*inner.clone()).to_init_value(var_type);
+            }
+            Initializer::Compound(inits) if matches!(var_type, Type::Array { .. }) => {
+                let Type::Array { element, size } = var_type.clone() else { unreachable!() };
+
+                let mut inits: Vec<_> = inits
+                    .iter()
+                    .map(|i| i.to_init_value(*element.clone()))
+                    .collect::<Result<_, _>>()?;
+
+                if inits.len() < size {
+                    inits.push(vec![StaticInit::Zero(size * var_type.size())]);
+                }
+
+                inits.into_iter().flatten().collect()
+            }
+            _ => anyhow::bail!("non-constant initializer"),
+        };
+
+        Ok(init_value)
     }
 }
 
@@ -392,13 +479,9 @@ impl Display for VarDecl {
 impl VarDecl {
     fn type_check_file(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
         let mut init = match self.init {
-            // place holder. check todo
-            Some(Initializer::Single(TypedExpr { expr: Expr::Const(cnst), .. })) => {
-                Initial(cnst.into_static_init(&self.var_type))
-            }
+            Some(ref inits) => Initial(inits.to_init_value(self.var_type.clone())?),
             None if self.sc == StorageClass::Extern => NoInit,
             None => Tentative,
-            _ => anyhow::bail!("non-constant initializer"),
         };
 
         let mut global = self.sc != StorageClass::Static;
@@ -423,7 +506,7 @@ impl VarDecl {
                     _ => {}
                 }
 
-                match (init, *o_i) {
+                match (init.clone(), o_i.clone()) {
                     (Initial(_), Initial(_)) => anyhow::bail!("conflicting file scope definitions"),
                     (Initial(i), _) | (_, Initial(i)) => init = Initial(i),
                     (Tentative, _) | (_, Tentative) => init = Tentative,
@@ -458,12 +541,11 @@ impl VarDecl {
             },
             StorageClass::Static => {
                 let init_value = match self.init.take() {
-                    // place holder for now. todo
-                    Some(Initializer::Single(TypedExpr { expr: Expr::Const(cnst), .. })) => {
-                        Initial(cnst.into_static_init(&self.var_type))
-                    }
-                    None => Initial(StaticInit::Int(0)),
-                    _ => anyhow::bail!("non-constant initializer on local static variable"),
+                    Some(init) => Initial(
+                        init.type_check(symbols, self.var_type.clone())?
+                            .to_init_value(self.var_type.clone())?,
+                    ),
+                    None => Initial(vec![StaticInit::Int(0)]),
                 };
 
                 symbols.insert(
@@ -481,9 +563,7 @@ impl VarDecl {
                 );
 
                 self.init = match self.init {
-                    Some(v) => {
-                        Some(v.type_check(symbols)?.cast_by_assignment(self.var_type.clone())?)
-                    }
+                    Some(v) => Some(v.type_check(symbols, self.var_type.clone())?),
                     None => None,
                 };
             }
@@ -568,6 +648,16 @@ impl FuncDecl {
             unreachable!()
         };
 
+        anyhow::ensure!(
+            !matches!(*ret_type, Type::Array { .. }),
+            "a function cannot return an array"
+        );
+        let arg_types = arg_types.into_iter().map(|t| match t {
+            Type::Array { element, .. } => Type::Pointer { to: element },
+            _ => t,
+        });
+        let fun_type = Type::Func { params: arg_types.clone().collect(), ret: ret_type.clone() };
+
         match symbols.get(&self.name) {
             None => {}
             Some(TypeCtx { type_: Type::Func { .. }, attr: Func { defined, .. } })
@@ -575,17 +665,15 @@ impl FuncDecl {
             {
                 anyhow::bail!("multiple function definitions")
             }
-
             Some(TypeCtx { type_: Type::Func { .. }, attr: Func { global, .. } })
                 if *global && self.sc == StorageClass::Static =>
             {
                 anyhow::bail!("Static function declaration follows non-static")
             }
-
             Some(TypeCtx {
                 type_: type_ @ Type::Func { params, .. },
                 attr: Func { defined, global: old_global },
-            }) if params.len() == self.params.len() && *type_ == self.fun_type => {
+            }) if params.len() == self.params.len() && *type_ == fun_type => {
                 already_defined = *defined;
                 global = *old_global;
             }
@@ -595,7 +683,7 @@ impl FuncDecl {
         symbols.insert(
             self.name.clone(),
             TypeCtx {
-                type_: self.fun_type.clone(),
+                type_: fun_type.clone(),
                 attr: Func { defined: already_defined || has_body, global },
             },
         );
@@ -615,7 +703,7 @@ impl FuncDecl {
             params: self.params,
             body,
             sc: if global { StorageClass::Extern } else { StorageClass::Static },
-            fun_type: self.fun_type,
+            fun_type,
         })
     }
 
@@ -1381,13 +1469,14 @@ impl Stmt {
     ) -> anyhow::Result<Self> {
         Ok(match self {
             Self::Return(expr) => {
-                let expr = expr.type_check(symbols)?.cast_by_assignment(enclosing_func_ret)?;
+                let expr =
+                    expr.type_check_and_convert(symbols)?.cast_by_assignment(enclosing_func_ret)?;
 
                 Self::Return(expr)
             }
-            Self::Expression(expr) => Self::Expression(expr.type_check(symbols)?),
+            Self::Expression(expr) => Self::Expression(expr.type_check_and_convert(symbols)?),
             Self::If { cond, then, else_ } => Self::If {
-                cond: cond.type_check(symbols)?,
+                cond: cond.type_check_and_convert(symbols)?,
                 then: Box::new(then.type_check(symbols, enclosing_func_ret.clone())?),
                 else_: match else_ {
                     Some(s) => Some(Box::new(s.type_check(symbols, enclosing_func_ret)?)),
@@ -1398,13 +1487,13 @@ impl Stmt {
                 Self::Compound(block.type_check(symbols, &enclosing_func_ret)?)
             }
             Self::While { cond, body, label } => Self::While {
-                cond: cond.type_check(symbols)?,
+                cond: cond.type_check_and_convert(symbols)?,
                 body: Box::new(body.type_check(symbols, enclosing_func_ret)?),
                 label,
             },
             Self::DoWhile { body, cond, label } => Self::DoWhile {
                 body: Box::new(body.type_check(symbols, enclosing_func_ret)?),
-                cond: cond.type_check(symbols)?,
+                cond: cond.type_check_and_convert(symbols)?,
                 label,
             },
             Self::For { init, cond, post, body, label } => Self::For {
@@ -1413,15 +1502,15 @@ impl Stmt {
                         anyhow::bail!("specifier in for loop");
                     }
                     Left(d) => Left(d.type_check_block(symbols)?),
-                    Right(Some(e)) => Right(Some(e.type_check(symbols)?)),
+                    Right(Some(e)) => Right(Some(e.type_check_and_convert(symbols)?)),
                     Right(None) => Right(None),
                 },
                 cond: match cond {
-                    Some(e) => Some(e.type_check(symbols)?),
+                    Some(e) => Some(e.type_check_and_convert(symbols)?),
                     None => None,
                 },
                 post: match post {
-                    Some(e) => Some(e.type_check(symbols)?),
+                    Some(e) => Some(e.type_check_and_convert(symbols)?),
                     None => None,
                 },
                 body: Box::new(body.type_check(symbols, enclosing_func_ret)?),
@@ -1431,7 +1520,7 @@ impl Stmt {
                 Self::Label(label, Box::new(stmt.type_check(symbols, enclosing_func_ret)?))
             }
             Self::Switch { ctrl, body, label, cases } => {
-                let ctrl = ctrl.type_check(symbols)?;
+                let ctrl = ctrl.type_check_and_convert(symbols)?;
                 anyhow::ensure!(matches!(
                     ctrl.type_,
                     Some(Type::Int | Type::UInt | Type::Long | Type::ULong)
@@ -1445,7 +1534,7 @@ impl Stmt {
                 }
             }
             Self::Case { cnst, body, label } => {
-                let cnst = cnst.type_check(symbols)?;
+                let cnst = cnst.type_check_and_convert(symbols)?;
                 anyhow::ensure!(matches!(
                     cnst.type_,
                     Some(Type::Int | Type::UInt | Type::Long | Type::ULong)
@@ -1482,6 +1571,16 @@ impl TypedExpr {
 
     fn type_check(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
         self.expr.type_check(symbols)
+    }
+    fn type_check_and_convert(self, symbols: &mut Namespace<TypeCtx>) -> anyhow::Result<Self> {
+        let res = self.expr.type_check(symbols)?;
+        match res.type_.clone().unwrap() {
+            Type::Array { element, .. } => {
+                let addr = Expr::AddrOf(Box::new(res));
+                Ok(addr.typed(Type::Pointer { to: Box::new(*element) }))
+            }
+            _ => Ok(res),
+        }
     }
 
     fn is_place(&self) -> bool {
@@ -1591,7 +1690,7 @@ impl Expr {
         TypedExpr { expr: self, type_: Some(ty) }
     }
     fn is_place(&self) -> bool {
-        matches!(self, Self::Var(_) | Self::Deref(_))
+        matches!(self, Self::Var(_) | Self::Deref(_) | Self::Subscript(..))
     }
     fn is_null_pointer_constant(&self) -> bool {
         match self {
@@ -1653,7 +1752,10 @@ impl Expr {
             }
             Self::AddrOf(expr) => Self::AddrOf(Box::new(expr.resolve_identifiers(map)?)),
             Self::Deref(expr) => Self::Deref(Box::new(expr.resolve_identifiers(map)?)),
-            Self::Subscript(..) => todo!(),
+            Self::Subscript(e1, e2) => Self::Subscript(
+                Box::new(e1.resolve_identifiers(map)?),
+                Box::new(e2.resolve_identifiers(map)?),
+            ),
         })
     }
 
@@ -1672,7 +1774,7 @@ impl Expr {
                 Ok(Self::AddrOf(expr).typed(Type::Pointer { to }))
             }
             Self::Deref(expr) => {
-                let expr = expr.type_check(symbols)?;
+                let expr = expr.type_check_and_convert(symbols)?;
                 if let Some(Type::Pointer { to }) = expr.type_.clone() {
                     Ok(Self::Deref(Box::new(expr)).typed(*to))
                 } else {
@@ -1695,7 +1797,7 @@ impl Expr {
 
                 let mut acc = Vec::with_capacity(types.len());
                 for (arg, ty) in args.iter().cloned().zip(types) {
-                    let arg = arg.type_check(symbols)?;
+                    let arg = arg.type_check_and_convert(symbols)?;
                     acc.push(arg.cast_by_assignment(ty)?);
                 }
 
@@ -1711,9 +1813,8 @@ impl Expr {
                 Some(ty) => Ok(Self::Var(name).typed(ty)),
             },
 
-            // --
             Self::Unary(op, expr) => {
-                let expr = Box::new(expr.type_check(symbols)?);
+                let expr = Box::new(expr.type_check_and_convert(symbols)?);
 
                 let ty = match op {
                     UnaryOp::Complement if expr.type_ == Some(Type::Double) => {
@@ -1737,8 +1838,8 @@ impl Expr {
             }
 
             Self::Binary { op: op @ (BinaryOp::Equal | BinaryOp::NotEqual), lhs, rhs } => {
-                let lhs = Box::new(lhs.type_check(symbols)?);
-                let rhs = Box::new(rhs.type_check(symbols)?);
+                let lhs = Box::new(lhs.type_check_and_convert(symbols)?);
+                let rhs = Box::new(rhs.type_check_and_convert(symbols)?);
 
                 let lhs_t = lhs.clone().type_.expect("type should exist");
                 let rhs_t = rhs.clone().type_.expect("type should exist");
@@ -1757,24 +1858,64 @@ impl Expr {
             }
 
             Self::Binary { op, lhs, rhs } => {
-                let lhs = Box::new(lhs.type_check(symbols)?);
-                let rhs = Box::new(rhs.type_check(symbols)?);
+                let lhs = Box::new(lhs.type_check_and_convert(symbols)?);
+                let rhs = Box::new(rhs.type_check_and_convert(symbols)?);
 
                 match op {
                     BinaryOp::And | BinaryOp::Or => {
                         return Ok(Self::Binary { op, lhs, rhs }.typed(Type::Int));
                     }
+                    BinaryOp::Add | BinaryOp::Subtract => match (op, *lhs.clone(), *rhs.clone()) {
+                        _ if lhs.clone().type_.unwrap().is_arithmatic()
+                            && rhs.clone().type_.unwrap().is_arithmatic() => {}
+                        // Pointer arithmatic
+                        // how to check for null pointers? do i have to? todo
+                        (BinaryOp::Add | BinaryOp::Subtract, ptr, other)
+                        | (BinaryOp::Add, other, ptr)
+                            if matches!(ptr.type_, Some(Type::Pointer { .. }))
+                                && other.clone().type_.unwrap().is_intish() =>
+                        {
+                            let lhs = Box::new(ptr.clone());
+                            let rhs = Box::new(other.cast_to_type(Type::Long));
+
+                            return Ok(Self::Binary { op, lhs, rhs }.typed(ptr.type_.unwrap()));
+                        }
+                        (BinaryOp::Subtract, lhp, rhp)
+                            if matches!(lhp.type_, Some(Type::Pointer { .. }))
+                                && lhp.type_ == rhp.type_ =>
+                        {
+                            return Ok(Self::Binary { op, lhs: Box::new(lhp), rhs: Box::new(rhp) }
+                                .typed(Type::Long));
+                        }
+                        _ => anyhow::bail!("invalid operators for arithmatic"),
+                    },
+                    BinaryOp::LessThan
+                    | BinaryOp::LessOrEqual
+                    | BinaryOp::GreaterThan
+                    | BinaryOp::GreaterOrEqual => match (*lhs.clone(), *rhs.clone()) {
+                        _ if lhs.clone().type_.unwrap().is_arithmatic()
+                            && rhs.clone().type_.unwrap().is_arithmatic() => {}
+                        (lhp, rhp)
+                            if matches!(lhp.type_, Some(Type::Pointer { .. }))
+                                && lhp.type_ == rhp.type_ =>
+                        {
+                            return Ok(Self::Binary { op, lhs: Box::new(lhp), rhs: Box::new(rhp) }
+                                .typed(Type::Int));
+                        }
+                        _ => anyhow::bail!("invalid operators for comparison"),
+                    },
+
                     BinaryOp::Reminder
                         if !(lhs.type_.as_ref().is_some_and(Type::is_intish)
                             && rhs.type_.as_ref().is_some_and(Type::is_intish)) =>
                     {
-                        anyhow::bail!("cannot modulo a double or a pointer")
+                        anyhow::bail!("invalid operands for modulo")
                     }
                     BinaryOp::Multiply | BinaryOp::Divide
                         if !(lhs.type_.as_ref().is_some_and(Type::is_arithmatic)
                             && rhs.type_.as_ref().is_some_and(Type::is_arithmatic)) =>
                     {
-                        anyhow::bail!("cannot mulyiply a pointer")
+                        anyhow::bail!("invalid operands for multiplication")
                     }
                     _ => {}
                 }
@@ -1827,10 +1968,10 @@ impl Expr {
             }
 
             Self::Assignemnt(lhs, rhs) => {
-                let lhs = Box::new(lhs.type_check(symbols)?);
+                let lhs = Box::new(lhs.type_check_and_convert(symbols)?);
                 anyhow::ensure!(lhs.is_place(), "cannot assign to a non place expression");
 
-                let rhs = rhs.type_check(symbols)?;
+                let rhs = rhs.type_check_and_convert(symbols)?;
 
                 let left_type =
                     lhs.clone().type_.expect("assignee type should be known at this point");
@@ -1841,10 +1982,11 @@ impl Expr {
             }
 
             Self::CompoundAssignment { op, lhs, rhs, .. } => {
-                let lhs = Box::new(lhs.type_check(symbols)?);
+                // fix for pointer arithmatic todo
+                let lhs = Box::new(lhs.type_check_and_convert(symbols)?);
                 anyhow::ensure!(lhs.is_place(), "cannot assign to a non place expression");
 
-                let rhs = Box::new(rhs.type_check(symbols)?);
+                let rhs = Box::new(rhs.type_check_and_convert(symbols)?);
 
                 let left_type =
                     lhs.clone().type_.expect("assignee type should be known at this point");
@@ -1918,9 +2060,9 @@ impl Expr {
                 Const::Double(_) => Ok(self.typed(Type::Double)),
             },
             Self::Conditional { cond, then, else_ } => {
-                let cond = Box::new(cond.type_check(symbols)?);
-                let then = then.type_check(symbols)?;
-                let else_ = else_.type_check(symbols)?;
+                let cond = Box::new(cond.type_check_and_convert(symbols)?);
+                let then = then.type_check_and_convert(symbols)?;
+                let else_ = else_.type_check_and_convert(symbols)?;
 
                 let then_t = then.clone().type_.expect("then type must be known");
                 let else_t = else_.clone().type_.expect("then type must be known");
@@ -1939,16 +2081,35 @@ impl Expr {
             }
 
             Self::Cast { target, inner } => {
-                let inner = Box::new(inner.type_check(symbols)?);
+                let inner = Box::new(inner.type_check_and_convert(symbols)?);
                 match (&target, inner.type_.as_ref().expect("type must be known")) {
                     (Type::Double, Type::Pointer { .. }) | (Type::Pointer { .. }, Type::Double) => {
                         anyhow::bail!("cannot cast pointers to double or vice versa")
                     }
+                    (Type::Array { .. }, _) => anyhow::bail!("cannot cast to arrays"),
                     _ => {}
                 }
                 Ok(Self::Cast { target: target.clone(), inner }.typed(target))
             }
-            Self::Subscript(..) => todo!(),
+            Self::Subscript(fst, snd) => {
+                let fst = fst.type_check_and_convert(symbols)?;
+                let snd = snd.type_check_and_convert(symbols)?;
+
+                let (ptr, int, ptr_type) = match (fst, snd) {
+                    // a[0] amd 0[a] are both valid for some reason.
+                    (ptr, other) | (other, ptr)
+                        if matches!(ptr.type_.as_ref().unwrap(), Type::Pointer { .. })
+                            && other.type_.as_ref().unwrap().is_intish() =>
+                    {
+                        let other = other.cast_to_type(Type::Long);
+                        let Some(Type::Pointer { to }) = ptr.type_.clone() else { unreachable!() };
+                        (ptr, other, to)
+                    }
+                    _ => anyhow::bail!("subscript must have integer and pointer operands"),
+                };
+
+                Ok(Self::Subscript(Box::new(ptr.clone()), Box::new(int)).typed(*ptr_type))
+            }
         }
     }
 }
@@ -2012,7 +2173,7 @@ macro_rules! const_cast {
                 (Self::Double(i), Type::$types) => Self::$types(i as _),
             )+
 
-            _ => unreachable!()
+            _ => unreachable!("Debug: Unhandled const cast from {:?} to {:?}", $self, $target_type),
         }
     };
 }

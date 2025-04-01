@@ -1,3 +1,5 @@
+#![expect(dead_code)]
+
 use crate::{
     ast::{self, Attributes::*, Namespace, StaticInit, Type, TypeCtx},
     ir::{self, GEN},
@@ -71,7 +73,8 @@ impl Program {
 pub enum AsmType {
     Longword,
     Quadword,
-    Doubleword, // ?
+    Doubleword,
+    ByteArray { size: u8, alignment: u8 },
 }
 use AsmType::*;
 
@@ -80,6 +83,7 @@ impl AsmType {
         match self {
             Longword => 4,
             Quadword | Doubleword => 8,
+            ByteArray { size, .. } => size,
         }
     }
     fn return_register(self) -> Operand {
@@ -87,6 +91,7 @@ impl AsmType {
             Longword => Reg(AX, 4),
             Quadword => Reg(AX, 8),
             Doubleword => Reg(XMM0, 8),
+            ByteArray { .. } => todo!(),
         }
     }
 
@@ -95,6 +100,7 @@ impl AsmType {
             Longword => "l",
             Quadword => "q",
             Doubleword => "sd", // NOT FOR XOR
+            ByteArray { .. } => todo!(),
         }
     }
 }
@@ -102,7 +108,7 @@ impl AsmType {
 #[derive(Debug, Clone)]
 pub enum TopLevel {
     Function { name: Identifier, instrs: Vec<Instr>, stack_size: i32, global: bool },
-    StaticVariable { name: Identifier, global: bool, init: StaticInit, alignment: i32 },
+    StaticVariable { name: Identifier, global: bool, init: Vec<StaticInit>, alignment: i32 },
     StaticConstant { name: Identifier, init: StaticInit, alignment: i32 },
 }
 
@@ -121,7 +127,10 @@ impl TopLevel {
 
                 instrs.iter().for_each(|i| i.emit_code(f));
             }
-            Self::StaticVariable { name, global, init, alignment } if init.is_zero() => {
+            Self::StaticVariable { name, global, init, alignment }
+                if init.iter().all(|i| i.is_zero()) =>
+            // placeholder . todo
+            {
                 if *global {
                     _ = writeln!(f, "\t.globl  _{name}");
                 }
@@ -137,7 +146,7 @@ impl TopLevel {
                 _ = writeln!(f, "\t.data");
                 _ = writeln!(f, "\t.balign {alignment}");
                 _ = writeln!(f, "_{name}:");
-                _ = writeln!(f, "\t.{init}");
+                _ = writeln!(f, "\t.{}", init[0]); // placeholder. todo
             }
             Self::StaticConstant { name, init, alignment } => {
                 match alignment {
@@ -431,6 +440,7 @@ impl Instr {
                 Longword => _ = writeln!(f, "\tcdq"),
                 Quadword => _ = writeln!(f, "\tcqo"),
                 Doubleword => unreachable!("this command isnt used with Floats"),
+                ByteArray { .. } => todo!(),
             },
 
             Self::Push(op) => _ = writeln!(f, "\tpushq   {}", op.emit_code()),
@@ -539,7 +549,10 @@ pub enum Operand {
     Imm(i64),
     Reg(Register, u8),
     Pseudo(Identifier),
+    PseudoMem(Identifier, usize),
+
     Memory(Register, i32),
+    Indexed { base: Register, idx: Register, scale: usize },
     Data(Identifier),
 }
 use Operand::*;
@@ -557,9 +570,10 @@ impl Operand {
             Imm(i) => eco_format!("${i}"),
             Reg(r, s) => r.emit_code(*s).into(),
             Memory(r, i) => eco_format!("{i}({})", r.emit_code(8)),
+            Indexed { base: _, idx: _, scale: _ } => todo!(),
             Data(name) => eco_format!("_{name}(%rip)"),
 
-            Pseudo(e) => unreachable!("pseudo register {e} printed"),
+            Pseudo(e) | PseudoMem(e, _) => unreachable!("pseudo register {e} printed"),
         }
     }
 
@@ -588,11 +602,13 @@ impl Operand {
                 (0, Quadword | Doubleword) => *stack_depth -= 8,
                 (v, Quadword | Doubleword) => *stack_depth -= 8 + (8 - v),
                 (_, Longword) => *stack_depth -= 4,
+                (_, ByteArray { .. }) => todo!(),
             }
             // do i need this assertion?
             match type_ {
                 Longword => assert!(stack_depth.abs() % 4 == 0),
                 Quadword | Doubleword => assert!(stack_depth.abs() % 8 == 0),
+                ByteArray { .. } => todo!(),
             }
 
             map.insert(name.clone(), *stack_depth);
@@ -808,6 +824,7 @@ impl ir::TopLevel {
                             int_reg_args.push((param, *arg_ty));
                         }
                         Doubleword | Longword | Quadword => stack_args.push((param, *arg_ty)),
+                        ByteArray { .. } => todo!(),
                     }
                 }
 
@@ -833,7 +850,7 @@ impl ir::TopLevel {
             Self::StaticVar { name, global, type_, init } => TopLevel::StaticVariable {
                 name: name.clone(),
                 global: *global,
-                init: init[0], // placeholder. todo
+                init: init.clone(),
                 alignment: match type_ {
                     Type::Int | Type::UInt => 4,
                     Type::Long | Type::ULong | Type::Pointer { .. } | Type::Double => 8,
@@ -873,6 +890,7 @@ impl ir::Instr {
             Self::UIntToDouble { src, dst } => {
                 let (src_ty, _) = src.to_asm_type(symbols);
                 match src_ty {
+                    ByteArray { .. } => todo!(),
                     Doubleword => unreachable!(),
                     Longword => vec![
                         Instr::MovZeroExtend(src.to_asm(consts), Reg(R11, 8)),
@@ -905,6 +923,7 @@ impl ir::Instr {
             Self::DoubleToUInt { src, dst } => {
                 let (dst_ty, _) = ir::Value::Var(dst.clone()).to_asm_type(symbols);
                 match dst_ty {
+                    ByteArray { .. } => todo!(),
                     Doubleword => unreachable!(),
                     Longword => vec![
                         Instr::Cvttsd2si(Quadword, src.to_asm(consts), Reg(R10, 8)),
@@ -946,6 +965,7 @@ impl ir::Instr {
                 let nan = eco_format!("nan_{}", GEN.fetch_add(1, Relaxed));
                 let dst = dst.to_asm();
                 match src_ty {
+                    ByteArray { .. } => todo!(),
                     Longword | Quadword => vec![
                         Instr::Cmp(src_ty, Imm(0), src.to_asm(consts)),
                         Instr::Mov(*dst_ty, Imm(0), dst.clone()),
@@ -1097,6 +1117,7 @@ impl ir::Instr {
                 let nan_label = eco_format!("nan_{}", counter);
 
                 match cond_ty {
+                    ByteArray { .. } => todo!(),
                     Longword | Quadword => vec![
                         Instr::Cmp(cond_ty, Imm(0), cond.to_asm(consts)),
                         Instr::JmpCC(E, target.clone()),
@@ -1118,6 +1139,7 @@ impl ir::Instr {
                 let ian_label = eco_format!("ian_{}", counter);
 
                 match cond_ty {
+                    ByteArray { .. } => todo!(),
                     Longword | Quadword => vec![
                         Instr::Cmp(cond_ty, Imm(0), cond.to_asm(consts)),
                         Instr::JmpCC(NE, target.clone()),
@@ -1150,6 +1172,7 @@ impl ir::Instr {
                     let value = value.to_asm(consts);
 
                     match arg_ty {
+                        ByteArray { .. } => todo!(),
                         Doubleword if double_reg_args.len() < 8 => double_reg_args.push(value),
                         Longword | Quadword if int_reg_args.len() < 6 => {
                             int_reg_args.push((value, arg_ty));

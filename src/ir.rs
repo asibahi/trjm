@@ -230,13 +230,13 @@ impl ast::Program {
                 ast::Tentative => Some(TopLevel::StaticVar {
                     name: name.clone(),
                     global: *global,
-                    init: vec![type_ctx.type_.zeroed_static()], // placeholder. todo
+                    init: vec![type_ctx.type_.zeroed_static()],
                     type_: type_ctx.type_.clone(),
                 }),
                 ast::Initial(init) => Some(TopLevel::StaticVar {
                     name: name.clone(),
                     global: *global,
-                    init: init.clone(), // placeholder. todo
+                    init: init.clone(),
                     type_: type_ctx.type_.clone(),
                 }),
 

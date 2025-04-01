@@ -2,7 +2,7 @@
 
 This compiler is basically me following, chapter by chapter, [Writing a C Compiler](https://nostarch.com/writing-c-compiler) by Nora Sandler.
 
-As of this writing, it implements everything up to chapter 13 (doubles), including extra credit (and also binary, octal, and hex number literals!) It passes every test up to that point in [the official test suite](https://github.com/nlsandler/writing-a-c-compiler-tests).
+As of this writing, it implements everything up to chapter 14 (pointers), including extra credit (and also binary, octal, and hex number literals!) It passes every test up to that point in [the official test suite](https://github.com/nlsandler/writing-a-c-compiler-tests). It also implements the initial stages of chapter 15 (arrays).
 
 The lexer and parser are implemented using `nom` and `nom-language`. But the rest of hte code base follows the book closely.
 
@@ -17,3 +17,5 @@ It supports the following flags:
 Output is to `stdout` or it saves a file. 
 
 Works on x86 emulation in MacOS.
+
+Currently on hiatus. I lost steam following the cycle of adding features and following bugs. Maybe I will pick it up later.

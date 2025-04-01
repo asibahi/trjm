@@ -133,12 +133,11 @@ impl Type {
     pub fn size(&self) -> usize {
         match self {
             Self::Int | Self::UInt => 4,
-            Self::Long | Self::ULong | Self::Pointer { .. } => 8,
+            Self::Long | Self::ULong | Self::Pointer { .. } | Type::Double => 8,
             Self::Func { .. } => unreachable!(
                 "function types don't have size. why is function in the same type anyway ?"
             ),
 
-            Self::Double => unreachable!("double size unused for IR"),
             Self::Array { element, size } => size * element.size(),
         }
     }
@@ -200,7 +199,7 @@ impl Type {
             }
         }
     }
-    fn is_intish(&self) -> bool {
+    pub fn is_intish(&self) -> bool {
         matches!(self, Self::Int | Self::Long | Self::UInt | Self::ULong)
     }
     fn is_arithmatic(&self) -> bool {
@@ -388,15 +387,19 @@ impl Display for Initializer {
     }
 }
 impl Initializer {
+    pub fn flatten_exprs (self) -> Vec<TypedExpr> {
+        match self {
+            Initializer::Single(e) => vec![e],
+            Initializer::Compound(inits) => inits.into_iter().flat_map(|i| i.flatten_exprs()).collect(),
+        }
+    }
     fn type_check(self, symbols: &mut Namespace<TypeCtx>, target: Type) -> anyhow::Result<Self> {
         Ok(match (&target, self) {
             (_, Self::Single(expr)) => {
-                let expr =
-                    expr.clone().type_check_and_convert(symbols)?.cast_by_assignment(target)?;
-                // is this correct?
+                let expr = expr.type_check_and_convert(symbols)?.cast_by_assignment(target)?;
                 Self::Single(expr)
             }
-            (Type::Array { element, size }, Initializer::Compound(inits)) => {
+            (Type::Array { element, size }, Self::Compound(inits)) => {
                 anyhow::ensure!(inits.len() <= *size, "wrong number of values in initializer");
 
                 let mut inits = inits
@@ -427,15 +430,15 @@ impl Initializer {
         })
     }
 
-    fn to_init_value(&self, var_type: Type) -> anyhow::Result<Vec<StaticInit>> {
+    pub fn to_init_value(&self, var_type: Type) -> anyhow::Result<Vec<StaticInit>> {
         let init_value = match self {
-            Initializer::Single(TypedExpr { expr: Expr::Const(cnst), .. }) => {
+            Self::Single(TypedExpr { expr: Expr::Const(cnst), .. }) => {
                 vec![cnst.into_static_init(&var_type)]
             }
-            Initializer::Single(TypedExpr { expr: Expr::Cast { inner, .. }, .. }) => {
-                return Initializer::Single(*inner.clone()).to_init_value(var_type);
+            Self::Single(TypedExpr { expr: Expr::Cast { inner, .. }, .. }) => {
+                return Self::Single(*inner.clone()).to_init_value(var_type);
             }
-            Initializer::Compound(inits) if matches!(var_type, Type::Array { .. }) => {
+            Self::Compound(inits) if matches!(var_type, Type::Array { .. }) => {
                 let Type::Array { element, size } = var_type.clone() else { unreachable!() };
 
                 let mut inits: Vec<_> = inits
@@ -2108,7 +2111,7 @@ impl Expr {
                     _ => anyhow::bail!("subscript must have integer and pointer operands"),
                 };
 
-                Ok(Self::Subscript(Box::new(ptr.clone()), Box::new(int)).typed(*ptr_type))
+                Ok(Self::Subscript(Box::new(ptr), Box::new(int)).typed(*ptr_type))
             }
         }
     }

@@ -33,13 +33,16 @@ impl Display for Program {
 #[derive(Debug, Clone)]
 pub enum TopLevel {
     Function { name: Identifier, global: bool, params: Vec<Identifier>, body: Vec<Instr> },
-    StaticVar { name: Identifier, global: bool, type_: Type, init: StaticInit },
+    StaticVar { name: Identifier, global: bool, type_: Type, init: Vec<StaticInit> },
 }
 impl Display for TopLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::StaticVar { name, global, type_, init } => {
-                writeln!(f, "Static: {name}. global:{global}. type: {type_}. initial value: {init}")
+                writeln!(
+                    f,
+                    "Static: {name}. global:{global}. type: {type_}. initial value: {init:?}"
+                )
             }
             Self::Function { name, global, params, body } => {
                 write!(f, "Function: {name}. global:{global}. (")?;
@@ -82,6 +85,9 @@ pub enum Instr {
     JumpIfNotZero { cond: Value, target: Identifier },
     Label(Identifier),
     FuncCall { name: Identifier, args: Vec<Value>, dst: Place },
+
+    AddPtr { ptr: Value, idx: Value, scale: usize, dst: Place },
+    CopyToOffset { src: Value, dst: Identifier, offset: usize },
 }
 impl Display for Instr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -114,6 +120,11 @@ impl Display for Instr {
             Self::GetAddress { src, dst } => write!(f, "{:<8} <- addr {}", dst.0, src),
             Self::Load { src_ptr, dst } => write!(f, "{:<8} <- load {src_ptr}", dst.0),
             Self::Store { src, dst_ptr } => write!(f, "{:<8} <- store {src}", dst_ptr.0),
+
+            Self::AddPtr { ptr, idx, scale, dst } => {
+                write!(f, "{:<8} <- {ptr} ++ ({idx} * {scale})", dst.0)
+            }
+            Self::CopyToOffset { src, dst, offset } => write!(f, "{:<8} <- {src} @ {offset}", dst),
         }
     }
 }
@@ -219,13 +230,13 @@ impl ast::Program {
                 ast::Tentative => Some(TopLevel::StaticVar {
                     name: name.clone(),
                     global: *global,
-                    init: type_ctx.type_.zeroed_static(),
+                    init: vec![type_ctx.type_.zeroed_static()], // placeholder. todo
                     type_: type_ctx.type_.clone(),
                 }),
                 ast::Initial(init) => Some(TopLevel::StaticVar {
                     name: name.clone(),
                     global: *global,
-                    init: init[0],
+                    init: init.clone(), // placeholder. todo
                     type_: type_ctx.type_.clone(),
                 }),
 
@@ -495,6 +506,52 @@ impl ast::Expr {
             Self::Binary { op: op @ (ast::BinaryOp::And | ast::BinaryOp::Or), lhs, rhs } => {
                 logical_ops_instrs(instrs, symbols, *op, lhs, rhs, expr_type)
             }
+            Self::Binary { op: op @ (ast::BinaryOp::Add | ast::BinaryOp::Subtract), lhs, rhs }
+                if matches!(lhs.type_, Some(Type::Pointer { .. }))
+                    && rhs.type_.as_ref().is_some_and(|t| t.is_intish()) =>
+            {
+                let Some(Type::Pointer { ref to }) = lhs.type_ else { unreachable!() };
+                let lhs = lhs.to_ir_and_convert(instrs, symbols);
+                let rhs = match op {
+                    ast::BinaryOp::Add => rhs.to_ir_and_convert(instrs, symbols),
+                    ast::BinaryOp::Subtract => Self::Unary(ast::UnaryOp::Negate, rhs.clone())
+                        .to_ir_and_convert(instrs, symbols, rhs.type_.as_ref().unwrap()),
+                    _ => unreachable!(),
+                };
+
+                let dst = make_ir_variable("sbs", expr_type.clone(), symbols);
+
+                instrs.push(Instr::AddPtr {
+                    ptr: lhs,
+                    idx: rhs,
+                    scale: to.size(),
+                    dst: dst.clone(),
+                });
+                ExprResult::Plain(Value::Var(dst))
+            }
+            Self::Binary { op: ast::BinaryOp::Subtract, lhs, rhs }
+                if matches!(lhs.type_, Some(Type::Pointer { .. }))
+                    && matches!(rhs.type_, Some(Type::Pointer { .. })) =>
+            {
+                let Some(Type::Pointer { ref to }) = lhs.type_ else { unreachable!() };
+                let lhs = lhs.to_ir_and_convert(instrs, symbols);
+                let rhs = rhs.to_ir_and_convert(instrs, symbols);
+
+                let diff = make_ir_variable("diff", expr_type.clone(), symbols);
+                let dst = make_ir_variable("psub", expr_type.clone(), symbols);
+
+                instrs.extend([
+                    Instr::Binary { op: BinOp::Subtract, lhs, rhs, dst: diff.clone() },
+                    Instr::Binary {
+                        op: BinOp::Divide,
+                        lhs: Value::Var(diff),
+                        rhs: Value::Const(Const::ULong(to.size() as _)),
+                        dst: dst.clone(),
+                    },
+                ]);
+
+                ExprResult::Plain(Value::Var(dst))
+            }
             Self::Binary { op, lhs, rhs } => {
                 let lhs = lhs.to_ir_and_convert(instrs, symbols);
                 let rhs = rhs.to_ir_and_convert(instrs, symbols);
@@ -511,7 +568,7 @@ impl ast::Expr {
                 let value = if place.type_ == value.type_ {
                     value.to_ir_and_convert(instrs, symbols)
                 } else {
-                    ast::Expr::Cast { target: place.type_.clone().unwrap(), inner: value.clone() }
+                    Self::Cast { target: place.type_.clone().unwrap(), inner: value.clone() }
                         .typed(place.type_.clone().unwrap())
                         .to_ir_and_convert(instrs, symbols)
                 };
@@ -563,7 +620,7 @@ impl ast::Expr {
                         let tmp = if cast_op {
                             emit_cast_instr(instrs, symbols, expr_type, Value::Var(tmp), &common)
                         } else {
-                            tmp.clone()
+                            tmp
                         };
                         instrs.push(Instr::Copy { src: Value::Var(tmp), dst: dst.clone() });
 
@@ -588,7 +645,7 @@ impl ast::Expr {
                         let tmp = if cast_op {
                             emit_cast_instr(instrs, symbols, expr_type, Value::Var(tmp), &common)
                         } else {
-                            tmp.clone()
+                            tmp
                         };
                         let ret = Value::Var(tmp);
                         instrs.push(Instr::Store { src: ret.clone(), dst_ptr: dst.clone() });
@@ -664,7 +721,16 @@ impl ast::Expr {
                 let result = inner.to_ir_and_convert(instrs, symbols);
                 ExprResult::DerefPtr(result)
             }
-            Self::Subscript(..) => todo!(),
+            Self::Subscript(lhs, rhs) => {
+                // after type checking, ptr is always first
+                let ExprResult::Plain(res) =
+                    Self::Binary { op: ast::BinaryOp::Add, lhs: lhs.clone(), rhs: rhs.clone() }
+                        .to_ir(instrs, symbols, expr_type)
+                else {
+                    unreachable!()
+                };
+                ExprResult::DerefPtr(res)
+            }
         }
     }
 }
@@ -879,20 +945,36 @@ impl ast::Decl {
 }
 impl ast::VarDecl {
     fn to_ir(&self, instrs: &mut Vec<Instr>, symbols: &mut Namespace<TypeCtx>) {
-        // placeholder for now. todo
-        if let Some(ast::Initializer::Single(e)) = &self.init {
-            let Some(TypeCtx { type_: dst_type, .. }) = symbols.get(&self.name) else {
-                unreachable!()
-            };
-            let v = if *dst_type == e.type_.clone().unwrap() {
-                e.to_ir_and_convert(instrs, symbols)
-            } else {
-                ast::Expr::Cast { target: dst_type.clone(), inner: Box::new(e.clone()) }
-                    .typed(dst_type.clone())
-                    .to_ir_and_convert(instrs, symbols)
-            };
+        match &self.init {
+            Some(ast::Initializer::Single(e)) => {
+                let Some(TypeCtx { type_: dst_type, .. }) = symbols.get(&self.name) else {
+                    unreachable!()
+                };
+                let v = if *dst_type == e.type_.clone().unwrap() {
+                    e.to_ir_and_convert(instrs, symbols)
+                } else {
+                    ast::Expr::Cast { target: dst_type.clone(), inner: Box::new(e.clone()) }
+                        .typed(dst_type.clone())
+                        .to_ir_and_convert(instrs, symbols)
+                };
 
-            instrs.push(Instr::Copy { src: v, dst: Place(self.name.clone()) });
+                instrs.push(Instr::Copy { src: v, dst: Place(self.name.clone()) });
+            }
+            Some(ast::Initializer::Compound(inits)) => {
+                let exprs = inits.clone().into_iter().flat_map(|i| i.flatten_exprs());
+
+                let mut offset = 0;
+                for expr in exprs {
+                    let ir_expr = expr.to_ir_and_convert(instrs, symbols);
+                    instrs.push(Instr::CopyToOffset {
+                        src: ir_expr,
+                        dst: self.name.clone(),
+                        offset,
+                    });
+                    offset += expr.type_.unwrap().size();
+                }
+            }
+            None => {}
         }
     }
 }

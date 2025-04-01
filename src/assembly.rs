@@ -833,7 +833,7 @@ impl ir::TopLevel {
             Self::StaticVar { name, global, type_, init } => TopLevel::StaticVariable {
                 name: name.clone(),
                 global: *global,
-                init: *init,
+                init: init[0], // placeholder. todo
                 alignment: match type_ {
                     Type::Int | Type::UInt => 4,
                     Type::Long | Type::ULong | Type::Pointer { .. } | Type::Double => 8,
@@ -1217,6 +1217,8 @@ impl ir::Instr {
                     Instr::Mov(src_ty, src.to_asm(consts), Memory(AX, 0)),
                 ]
             }
+            Self::AddPtr { .. } => todo!(),
+            Self::CopyToOffset { .. } => todo!(),
         }
     }
 }

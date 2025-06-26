@@ -1211,7 +1211,7 @@ impl ir::Instr {
                         Operator::Add,
                         Quadword,
                         Imm(8 * stack_depth as i64
-                            + (stack_depth % 2 != 0).then_some(8).unwrap_or_default()),
+                            + if stack_depth % 2 != 0 { 8 } else { Default::default() }),
                         Reg(SP, 8),
                     )))
                     .chain([Instr::Mov(*dst_ty, dst_ty.return_register(), dst.to_asm())])

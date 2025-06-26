@@ -1,3 +1,5 @@
+#![allow(clippy::large_enum_variant)]
+
 use crate::ir::{self, GEN};
 use ecow::{EcoString as Identifier, eco_format};
 use either::Either::{self, Left, Right};
@@ -376,7 +378,7 @@ pub enum Initializer {
 impl Display for Initializer {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Single(expr) => write!(f, "{}", expr),
+            Self::Single(expr) => write!(f, "{expr}"),
             Self::Compound(inits) => {
                 for (idx, init) in inits.iter().enumerate() {
                     write!(f, "{}{init}", if idx != 0 { ", " } else { "{ " })?;
@@ -387,10 +389,12 @@ impl Display for Initializer {
     }
 }
 impl Initializer {
-    pub fn flatten_exprs (self) -> Vec<TypedExpr> {
+    pub fn flatten_exprs(self) -> Vec<TypedExpr> {
         match self {
             Initializer::Single(e) => vec![e],
-            Initializer::Compound(inits) => inits.into_iter().flat_map(|i| i.flatten_exprs()).collect(),
+            Initializer::Compound(inits) => {
+                inits.into_iter().flat_map(|i| i.flatten_exprs()).collect()
+            }
         }
     }
     fn type_check(self, symbols: &mut Namespace<TypeCtx>, target: Type) -> anyhow::Result<Self> {

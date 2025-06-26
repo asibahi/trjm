@@ -124,7 +124,7 @@ impl Display for Instr {
             Self::AddPtr { ptr, idx, scale, dst } => {
                 write!(f, "{:<8} <- {ptr} ++ ({idx} * {scale})", dst.0)
             }
-            Self::CopyToOffset { src, dst, offset } => write!(f, "{:<8} <- {src} @ {offset}", dst),
+            Self::CopyToOffset { src, dst, offset } => write!(f, "{dst:<8} <- {src} @ {offset}"),
         }
     }
 }
